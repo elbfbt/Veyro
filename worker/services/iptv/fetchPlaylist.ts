@@ -3,26 +3,50 @@ import { UnsafeUrlError, assertSafePublicUrl, assertSafeResolvedHost } from './u
 import type { PlaylistFetchResult, PlaylistFetcher } from './types';
 
 export class PlaylistFetchError extends Error {
-  constructor(message = 'The provider playlist could not be retrieved.') {
+  constructor(message = 'The provider request could not be completed.') {
     super(message);
     this.name = 'PlaylistFetchError';
+  }
+}
+
+export class UpstreamHttpError extends Error {
+  constructor(public readonly status: number) {
+    super('The upstream request failed.');
+    this.name = 'UpstreamHttpError';
+  }
+}
+
+export class UpstreamTimeoutError extends Error {
+  constructor() {
+    super('The upstream request timed out.');
+    this.name = 'UpstreamTimeoutError';
   }
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 3;
 
-export interface PlaylistFetcherOptions {
+export interface BoundedFetchOptions {
   fetchImpl?: typeof fetch;
   verifyDns?: boolean;
+  accept?: string;
 }
 
-/** Bounded, SSRF-checked fetch for playlist manifests only; never media. */
-export function createPlaylistFetcher(options: PlaylistFetcherOptions = {}): PlaylistFetcher {
+export interface BoundedFetchLimits {
+  maxBytes?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Bounded, SSRF-checked text fetch for metadata manifests and JSON catalogues.
+ * It never follows media streams and never includes the requested URL in errors.
+ */
+export function createBoundedTextFetcher(options: BoundedFetchOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const verifyDns = options.verifyDns ?? true;
+  const accept = options.accept ?? 'text/plain, */*;q=0.1';
 
-  return async (rawUrl, limits = {}): Promise<PlaylistFetchResult> => {
+  return async (rawUrl: string, limits: BoundedFetchLimits = {}): Promise<PlaylistFetchResult> => {
     const maxBytes = limits.maxBytes ?? 5 * 1024 * 1024;
     const timeoutMs = limits.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     let currentUrl = assertSafePublicUrl(rawUrl).toString();
@@ -36,7 +60,7 @@ export function createPlaylistFetcher(options: PlaylistFetcherOptions = {}): Pla
         const response = await fetchImpl(parsed.toString(), {
           redirect: 'manual',
           signal: controller.signal,
-          headers: { accept: 'application/vnd.apple.mpegurl, text/plain, */*;q=0.1' },
+          headers: { accept },
         });
 
         if (response.status >= 300 && response.status < 400) {
@@ -46,11 +70,11 @@ export function createPlaylistFetcher(options: PlaylistFetcherOptions = {}): Pla
           continue;
         }
 
-        if (!response.ok) throw new PlaylistFetchError();
+        if (!response.ok) throw new UpstreamHttpError(response.status);
 
         const declared = Number(response.headers.get('content-length') ?? '0');
         if (Number.isFinite(declared) && declared > maxBytes) {
-          throw new PlaylistLimitError('The provider playlist is too large to import.');
+          throw new PlaylistLimitError('The provider response is too large to import.');
         }
         if (!response.body) return { text: '', bytes: 0 };
 
@@ -64,7 +88,7 @@ export function createPlaylistFetcher(options: PlaylistFetcherOptions = {}): Pla
           bytes += value.byteLength;
           if (bytes > maxBytes) {
             await reader.cancel();
-            throw new PlaylistLimitError('The provider playlist is too large to import.');
+            throw new PlaylistLimitError('The provider response is too large to import.');
           }
           text += decoder.decode(value, { stream: true });
         }
@@ -73,12 +97,23 @@ export function createPlaylistFetcher(options: PlaylistFetcherOptions = {}): Pla
       }
       throw new PlaylistFetchError();
     } catch (error) {
-      if (error instanceof PlaylistLimitError || error instanceof UnsafeUrlError) throw error;
+      if (
+        error instanceof PlaylistLimitError ||
+        error instanceof UnsafeUrlError ||
+        error instanceof UpstreamHttpError ||
+        error instanceof UpstreamTimeoutError
+      ) {
+        throw error;
+      }
+      if (controller.signal.aborted) throw new UpstreamTimeoutError();
       throw new PlaylistFetchError();
     } finally {
       clearTimeout(timer);
     }
   };
 }
+
+export const createPlaylistFetcher = (options: BoundedFetchOptions = {}): PlaylistFetcher =>
+  createBoundedTextFetcher({ ...options, accept: 'application/vnd.apple.mpegurl, text/plain, */*;q=0.1' });
 
 export const fetchPublicPlaylist: PlaylistFetcher = createPlaylistFetcher();
