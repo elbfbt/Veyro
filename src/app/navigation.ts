@@ -34,7 +34,7 @@ export const navGroups: NavGroup[] = [
       { label: 'Home', path: '/', icon: Home },
       { label: 'Live TV', path: '/live', icon: Radio },
       { label: 'Movies', path: '/movies', icon: Film },
-      { label: 'TV Shows', path: '/series', icon: Tv },
+      { label: 'Series', path: '/series', icon: Tv },
       { label: 'Search', path: '/search', icon: Search },
     ],
   },
@@ -63,9 +63,10 @@ export const secondaryNavItems: NavItem[] = [
 
 export const mobileNavItems: NavItem[] = [
   { label: 'Home', path: '/', icon: Home },
-  { label: 'Live', path: '/live', icon: Radio },
+  { label: 'Live TV', path: '/live', icon: Radio },
+  { label: 'Movies', path: '/movies', icon: Film },
+  { label: 'Series', path: '/series', icon: Tv },
   { label: 'Search', path: '/search', icon: Search },
-  { label: 'Library', path: '/library', icon: Library },
   { label: 'Settings', path: '/settings', icon: Settings },
 ];
 
