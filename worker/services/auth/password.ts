@@ -1,7 +1,10 @@
 import type { PasswordHasher } from './types';
 import { fromBase64Url, randomToken, toBase64Url } from './tokens';
 
-const ITERATIONS = 210_000;
+/** Highest PBKDF2 iteration count Cloudflare Workers/workerd accepts. */
+export const MAX_PASSWORD_HASH_ITERATIONS = 100_000;
+
+const ITERATIONS = MAX_PASSWORD_HASH_ITERATIONS;
 const SALT_BYTES = 16;
 const KEY_BITS = 256;
 const ALGORITHM = 'pbkdf2-sha256';
@@ -35,7 +38,9 @@ export class WebCryptoPasswordHasher implements PasswordHasher {
     const [algorithm, iterationText, salt, expected] = parts;
     if (algorithm !== ALGORITHM || !iterationText || !salt || !expected) return false;
     const iterations = Number(iterationText);
-    if (!Number.isSafeInteger(iterations) || iterations < 100_000 || iterations > 1_000_000) return false;
+    // Reject unsupported costs before calling deriveBits: workerd throws above
+    // its ceiling, and swallowing that error would look like a wrong password.
+    if (!Number.isSafeInteger(iterations) || iterations !== MAX_PASSWORD_HASH_ITERATIONS) return false;
 
     try {
       const derived = await derive(password, fromBase64Url(salt), iterations);
