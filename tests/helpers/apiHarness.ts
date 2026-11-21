@@ -1,11 +1,12 @@
 import type { AuthService } from '../../worker/services/auth/service';
+import type { ProviderApiService } from '../../worker/services/iptv/providerApi';
 import { createApiHandler } from '../../worker/api';
 
 type SetCookieHeaders = Headers & { getSetCookie?: () => string[] };
 
-export function createHarness(auth: AuthService, origin = 'https://veyro.test') {
+export function createHarness(auth: AuthService, origin = 'https://veyro.test', providers?: ProviderApiService) {
   const jar = new Map<string, string>();
-  const handleApi = createApiHandler({ auth, databaseBound: true, now: () => 1_700_000_000 });
+  const handleApi = createApiHandler({ auth, databaseBound: true, now: () => 1_700_000_000, providers });
 
   const updateJar = (response: Response) => {
     const headers = response.headers as SetCookieHeaders;
@@ -27,7 +28,7 @@ export function createHarness(auth: AuthService, origin = 'https://veyro.test') 
     method: string,
     path: string,
     body?: unknown,
-    options: { csrf?: boolean; cookie?: boolean; session?: boolean } = {},
+    options: { csrf?: boolean; cookie?: boolean; session?: boolean; rawBody?: BodyInit } = {},
   ) => {
     const headers = new Headers();
     const useCookie = options.cookie ?? true;
@@ -46,7 +47,7 @@ export function createHarness(auth: AuthService, origin = 'https://veyro.test') 
       new Request(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: options.rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       }),
       new URL(url),
     );
