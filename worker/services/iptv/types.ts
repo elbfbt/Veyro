@@ -66,6 +66,33 @@ export interface M3uEntry {
   language: string | null;
   channelNumber: string | null;
   kind: MediaKind;
+  /** Explicit Xtream category metadata; M3U imports derive these from group-title. */
+  categoryExternalId?: string | null;
+  categoryName?: string | null;
+  categoryType?: 'channel' | 'movie' | 'series';
+  seriesExternalId?: string | null;
+  posterUrl?: string | null;
+  description?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+}
+
+export interface CatalogCategory {
+  externalId: string;
+  name: string;
+  type: 'channel' | 'movie' | 'series';
+}
+
+export interface XtreamCredentials {
+  username: string;
+  password: string;
+}
+
+export interface XtreamCatalog {
+  entries: M3uEntry[];
+  categories: CatalogCategory[];
+  skipped: number;
+  seriesDetailLimitReached: boolean;
 }
 
 export interface ParsedPlaylist {
@@ -128,5 +155,6 @@ export interface ProviderRepository {
     keys: CatalogKeysView,
     ids: { newId(): string },
     now: number,
+    categories?: CatalogCategory[],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }>;
 }

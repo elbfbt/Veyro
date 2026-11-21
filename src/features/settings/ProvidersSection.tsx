@@ -333,7 +333,7 @@ export function ProvidersSection() {
                         <Wifi size={15} /> Test
                       </button>
                     )}
-                    {provider.type === 'm3u_url' && (
+                    {provider.type !== 'm3u_file' && (
                       <button type="button" className="button button--ghost" disabled={busy !== null} onClick={() => void act(provider, 'refresh')}>
                         <RefreshCw size={15} /> Refresh
                       </button>

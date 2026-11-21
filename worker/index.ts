@@ -14,10 +14,12 @@ import { D1RateLimiter } from './services/auth/d1RateLimiter';
 import { WebCryptoPasswordHasher } from './services/auth/password';
 import { AuthService } from './services/auth/service';
 import { randomToken } from './services/auth/tokens';
+import { XtreamClient } from './services/iptv/xtreamClient';
 import {
   D1ProviderRepository,
   ProviderCredentialCipher,
   ProviderService,
+  createBoundedTextFetcher,
   fetchPublicPlaylist,
 } from './services/iptv/index';
 
@@ -45,6 +47,9 @@ export default {
         ids: { newId: () => crypto.randomUUID() },
         clock: { now: () => Math.floor(Date.now() / 1000) },
         fetchPlaylist: fetchPublicPlaylist,
+        xtreamClient: new XtreamClient({
+          fetchText: createBoundedTextFetcher({ accept: 'application/json' }),
+        }),
       });
       const handleApi = createApiHandler({
         auth,

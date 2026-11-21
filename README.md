@@ -124,11 +124,18 @@ query is scoped to the signed-in user. Passwords are encrypted with
 
 M3U URLs are fetched with a 10-second timeout, at most three manual redirects,
 a 5 MiB body cap and 20,000-entry cap. URL shape, redirect targets and DNS
-answers are checked for private/local addresses. Xtream credentials are stored
-encrypted, but automatic Xtream playlist retrieval is not implemented: the
-standard Xtream API puts credentials in query strings, which this project
-intentionally forbids. Uploaded files are imported once; upload a new file to
-replace their catalogue. Veyro does not proxy, relay or play streams in Phase 3.
+answers are checked for private/local addresses.
+
+Xtream refreshes are performed entirely by the Worker. Saved credentials are
+decrypted in memory, used to construct the conventional `player_api.php`
+requests, and discarded. Credential-bearing upstream URLs are never returned,
+logged or stored. The Worker imports live categories/channels, VOD
+categories/movies, series categories/series and series episodes into the same
+normalized tables. Catalogue responses are JSON with a 2 MiB cap and a 10-second
+timeout and an 8 MiB total response budget; episode details are fetched for the
+first 25 series per refresh within a 30-second overall request budget.
+Uploaded files are imported once; upload a new file to replace their catalogue.
+Veyro does not proxy, relay or play streams in Phase 3.
 
 ## Authentication API
 

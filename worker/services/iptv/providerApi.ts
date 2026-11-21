@@ -1,7 +1,8 @@
-import { PlaylistFetchError } from './fetchPlaylist';
+import { PlaylistFetchError, UpstreamTimeoutError } from './fetchPlaylist';
 import { PlaylistLimitError } from './m3uParser';
 import { ProviderError, isProviderError } from './providerService';
 import { UnsafeUrlError } from './urlSafety';
+import { XtreamClientError } from './xtreamClient';
 import type { ConnectionTestResult, ImportStats, ProviderView, UpdateProviderInput, CreateProviderInput } from './types';
 
 const JSON_HEADERS: Record<string, string> = {
@@ -28,6 +29,8 @@ export interface ProviderApiService {
 
 function errorResponse(error: unknown): Response {
   if (isProviderError(error)) return json({ error: error.code, message: error.message }, error.status);
+  if (error instanceof XtreamClientError) return json({ error: error.code, message: error.message }, error.status);
+  if (error instanceof UpstreamTimeoutError) return json({ error: 'provider_timeout', message: 'Provider request timed out.' }, 504);
   if (error instanceof UnsafeUrlError) return json({ error: 'unsafe_url', message: 'The URL is not allowed.' }, 400);
   if (error instanceof PlaylistLimitError) return json({ error: 'playlist_too_large', message: error.message }, 413);
   if (error instanceof PlaylistFetchError) return json({ error: 'playlist_fetch_failed', message: 'The playlist could not be retrieved.' }, 502);

@@ -1,4 +1,4 @@
-import type { ImportStats, M3uEntry, ProviderStatus, ProviderType, StoredProvider } from './types';
+import type { CatalogCategory, ImportStats, M3uEntry, ProviderStatus, ProviderType, StoredProvider } from './types';
 
 // Minimal structural subset of D1 so this module also typechecks in the SPA config.
 type BindValue = string | number | boolean | null | ArrayBuffer | Uint8Array;
@@ -63,7 +63,7 @@ function mapProvider(row: ProviderRow): StoredProvider {
 
 const CHUNK_SIZE = 400;
 
-export type CatalogKeyRow = { external_id: string; id: string };
+export type CatalogKeyRow = { external_id: string; id: string; type?: 'channel' | 'movie' | 'series' };
 export type CatalogKeys = {
   channels: Map<string, string>;
   movies: Map<string, string>;
@@ -176,15 +176,17 @@ export class D1ProviderRepository {
       this.db.prepare('SELECT external_id, id FROM movies WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
       this.db.prepare('SELECT external_id, id FROM series WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
       this.db.prepare('SELECT external_id, id FROM episodes WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
-      this.db.prepare('SELECT external_id, id FROM categories WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
+      this.db.prepare('SELECT external_id, id, type FROM categories WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
     ]);
     const toMap = (rows: { results: CatalogKeyRow[] }) => new Map(rows.results.map((row) => [row.external_id, row.id] as const));
+    const categoryMap = (rows: { results: CatalogKeyRow[] }) =>
+      new Map(rows.results.map((row) => [`${row.type ?? 'channel'}:${row.external_id}`, row.id] as const));
     return {
       channels: toMap(channels),
       movies: toMap(movies),
       series: toMap(series),
       episodes: toMap(episodes),
-      categories: toMap(categories),
+      categories: categoryMap(categories),
     };
   }
 
@@ -215,40 +217,63 @@ export class D1ProviderRepository {
     keys: CatalogKeys,
     ids: { newId(): string },
     now: number,
+    categories: CatalogCategory[] = [],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }> {
     const statements: ProviderStatement[] = [];
     let added = 0;
     let updated = 0;
     let categoriesAdded = 0;
     const categoryIds = new Map(keys.categories);
+    const seriesIds = new Map(keys.series);
+    const categoryKey = (externalId: string, type: 'channel' | 'movie' | 'series') => `${type}:${externalId}`;
+
+    const ensureCategory = (externalId: string, name: string, type: 'channel' | 'movie' | 'series') => {
+      const key = categoryKey(externalId, type);
+      let categoryId = categoryIds.get(key);
+      if (!categoryId) {
+        categoryId = ids.newId();
+        categoryIds.set(key, categoryId);
+        statements.push(
+          this.db
+            .prepare('INSERT INTO categories (id, user_id, provider_id, external_id, name, type) VALUES (?, ?, ?, ?, ?, ?)')
+            .bind(categoryId, userId, providerId, externalId, name, type),
+        );
+        categoriesAdded += 1;
+      }
+      return categoryId;
+    };
+
+    for (const category of categories) {
+      ensureCategory(category.externalId, category.name, category.type);
+    }
 
     for (const entry of entries) {
-      if (entry.groupTitle) {
+      let categoryId: string | null = null;
+      const type = entry.categoryType ?? 'channel';
+      if (entry.categoryExternalId) {
+        categoryId = ensureCategory(entry.categoryExternalId, entry.categoryName ?? entry.name, type);
+      } else if (entry.groupTitle) {
         const externalId = `group:${entry.groupTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'uncategorized'}`;
-        let categoryId = categoryIds.get(externalId);
-        if (!categoryId) {
-          categoryId = ids.newId();
-          categoryIds.set(externalId, categoryId);
-          statements.push(
-            this.db
-              .prepare('INSERT INTO categories (id, user_id, provider_id, external_id, name, type) VALUES (?, ?, ?, ?, ?, ?)')
-              .bind(categoryId, userId, providerId, externalId, entry.groupTitle, 'channel'),
-          );
-          categoriesAdded += 1;
-        }
+        categoryId = ensureCategory(externalId, entry.groupTitle, 'channel');
       }
-
-      const categoryId = entry.groupTitle
-        ? categoryIds.get(`group:${entry.groupTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'uncategorized'}`) ?? null
-        : null;
 
       if (entry.kind === 'series') {
         const existing = keys.series.get(entry.externalId);
         if (existing) {
-          statements.push(this.db.prepare('UPDATE series SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(entry.name, now, existing, userId));
+          statements.push(
+            this.db
+              .prepare('UPDATE series SET title = ?, poster_url = ?, description = ?, category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+              .bind(entry.name, entry.posterUrl ?? null, entry.description ?? null, categoryId, now, existing, userId),
+          );
           updated += 1;
         } else {
-          statements.push(this.db.prepare('INSERT INTO series (id, user_id, provider_id, category_id, external_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(ids.newId(), userId, providerId, categoryId, entry.externalId, entry.name, now, now));
+          const id = ids.newId();
+          seriesIds.set(entry.externalId, id);
+          statements.push(
+            this.db
+              .prepare('INSERT INTO series (id, user_id, provider_id, category_id, external_id, title, poster_url, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .bind(id, userId, providerId, categoryId, entry.externalId, entry.name, entry.posterUrl ?? null, entry.description ?? null, now, now),
+          );
           added += 1;
         }
         continue;
@@ -258,21 +283,45 @@ export class D1ProviderRepository {
       const existing = keys[table].get(entry.externalId);
       if (existing) {
         if (entry.kind === 'channel') {
-          statements.push(this.db.prepare('UPDATE channels SET name = ?, stream_url = ?, tvg_id = ?, tvg_name = ?, logo_url = ?, channel_number = ?, country = ?, language = ?, category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(entry.name, entry.streamUrl, entry.tvgId, entry.tvgName, entry.tvgLogo, entry.channelNumber, entry.country, entry.language, categoryId, now, existing, userId));
+          statements.push(
+            this.db
+              .prepare('UPDATE channels SET name = ?, stream_url = ?, tvg_id = ?, tvg_name = ?, logo_url = ?, channel_number = ?, country = ?, language = ?, category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+              .bind(entry.name, entry.streamUrl, entry.tvgId, entry.tvgName, entry.tvgLogo, entry.channelNumber, entry.country, entry.language, categoryId, now, existing, userId),
+          );
         } else if (entry.kind === 'movie') {
-          statements.push(this.db.prepare('UPDATE movies SET title = ?, stream_url = ?, category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(entry.name, entry.streamUrl, categoryId, now, existing, userId));
+          statements.push(
+            this.db
+              .prepare('UPDATE movies SET title = ?, stream_url = ?, poster_url = ?, description = ?, category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+              .bind(entry.name, entry.streamUrl, entry.posterUrl ?? null, entry.description ?? null, categoryId, now, existing, userId),
+          );
         } else {
-          statements.push(this.db.prepare('UPDATE episodes SET title = ?, stream_url = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(entry.name, entry.streamUrl, now, existing, userId));
+          statements.push(
+            this.db
+              .prepare('UPDATE episodes SET title = ?, stream_url = ?, season_number = ?, episode_number = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+              .bind(entry.name, entry.streamUrl, entry.seasonNumber ?? null, entry.episodeNumber ?? null, now, existing, userId),
+          );
         }
         updated += 1;
       } else {
         const id = ids.newId();
         if (entry.kind === 'channel') {
-          statements.push(this.db.prepare('INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, tvg_id, tvg_name, logo_url, stream_url, channel_number, country, language, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, userId, providerId, categoryId, entry.externalId, entry.name, entry.tvgId, entry.tvgName, entry.tvgLogo, entry.streamUrl, entry.channelNumber, entry.country, entry.language, now, now));
+          statements.push(
+            this.db
+              .prepare('INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, tvg_id, tvg_name, logo_url, stream_url, channel_number, country, language, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .bind(id, userId, providerId, categoryId, entry.externalId, entry.name, entry.tvgId, entry.tvgName, entry.tvgLogo, entry.streamUrl, entry.channelNumber, entry.country, entry.language, now, now),
+          );
         } else if (entry.kind === 'movie') {
-          statements.push(this.db.prepare('INSERT INTO movies (id, user_id, provider_id, category_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, userId, providerId, categoryId, entry.externalId, entry.name, entry.streamUrl, now, now));
+          statements.push(
+            this.db
+              .prepare('INSERT INTO movies (id, user_id, provider_id, category_id, external_id, title, stream_url, poster_url, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .bind(id, userId, providerId, categoryId, entry.externalId, entry.name, entry.streamUrl, entry.posterUrl ?? null, entry.description ?? null, now, now),
+          );
         } else {
-          statements.push(this.db.prepare('INSERT INTO episodes (id, user_id, provider_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(id, userId, providerId, entry.externalId, entry.name, entry.streamUrl, now, now));
+          statements.push(
+            this.db
+              .prepare('INSERT INTO episodes (id, user_id, provider_id, series_id, external_id, title, stream_url, season_number, episode_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .bind(id, userId, providerId, entry.seriesExternalId ? seriesIds.get(entry.seriesExternalId) ?? null : null, entry.externalId, entry.name, entry.streamUrl, entry.seasonNumber ?? null, entry.episodeNumber ?? null, now, now),
+          );
         }
         added += 1;
       }
@@ -283,4 +332,5 @@ export class D1ProviderRepository {
     }
     return { added, updated, categoriesAdded };
   }
+
 }
