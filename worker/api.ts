@@ -14,12 +14,20 @@ import {
 } from './http/cookies';
 import { isAllowedOrigin, isCsrfRequestValid, newCsrfToken } from './http/csrf';
 import { handleProviderApi, type ProviderApiService } from './services/iptv/providerApi';
+import { handleContentApi, type ContentApiService } from './services/content/api';
 
 export interface ApiDependencies {
   auth: AuthService;
   databaseBound: boolean;
   now: () => number;
   providers?: ProviderApiService;
+  content?: ContentApiService;
+}
+
+const CONTENT_RESOURCES = ['/api/channels', '/api/movies', '/api/series', '/api/categories', '/api/episodes'];
+
+function isContentPath(path: string): boolean {
+  return CONTENT_RESOURCES.some((resource) => path === resource || path.startsWith(`${resource}/`));
 }
 
 const JSON_HEADERS: Record<string, string> = {
@@ -231,7 +239,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
 
       // Unknown, not-yet-implemented APIs return 501 without demanding a
       // session; known protected routes below do require authentication.
-      if (!path.startsWith('/api/auth/') && !path.startsWith('/api/providers')) {
+      if (!path.startsWith('/api/auth/') && !path.startsWith('/api/providers') && !isContentPath(path)) {
         return json(
           {
             error: 'not_implemented',
@@ -248,6 +256,11 @@ export function createApiHandler(dependencies: ApiDependencies) {
       if (dependencies.providers) {
         const providerResponse = await handleProviderApi(request, url, context.user.id, dependencies.providers);
         if (providerResponse) return providerResponse;
+      }
+
+      if (dependencies.content) {
+        const contentResponse = await handleContentApi(request, url, context.user.id, dependencies.content);
+        if (contentResponse) return contentResponse;
       }
 
       if (path === '/api/auth/me' && method === 'GET') {
@@ -304,7 +317,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
         return json({ error: 'not_found', message: 'Unknown authentication endpoint.' }, 404);
       }
 
-      // Implemented in phases 3–7. A truthful 501 is preferable to placeholder
+      // Implemented in later phases. A truthful 501 is preferable to placeholder
       // data that looks like a working API.
       return json(
         {

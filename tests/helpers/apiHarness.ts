@@ -1,12 +1,18 @@
 import type { AuthService } from '../../worker/services/auth/service';
 import type { ProviderApiService } from '../../worker/services/iptv/providerApi';
+import type { ContentApiService } from '../../worker/services/content/api';
 import { createApiHandler } from '../../worker/api';
 
 type SetCookieHeaders = Headers & { getSetCookie?: () => string[] };
 
-export function createHarness(auth: AuthService, origin = 'https://veyro.test', providers?: ProviderApiService) {
+export function createHarness(
+  auth: AuthService,
+  origin = 'https://veyro.test',
+  providers?: ProviderApiService,
+  content?: ContentApiService,
+) {
   const jar = new Map<string, string>();
-  const handleApi = createApiHandler({ auth, databaseBound: true, now: () => 1_700_000_000, providers });
+  const handleApi = createApiHandler({ auth, databaseBound: true, now: () => 1_700_000_000, providers, content });
 
   const updateJar = (response: Response) => {
     const headers = response.headers as SetCookieHeaders;

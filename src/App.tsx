@@ -1,20 +1,20 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
-import { CatalogPage } from './features/catalog/CatalogPage';
 import { HomePage } from './features/home/HomePage';
 import { LivePage } from './features/live/LivePage';
+import { MoviesPage } from './features/content/MoviesPage';
+import { SeriesPage } from './features/content/SeriesPage';
+import { SeriesDetailPage } from './features/content/SeriesDetailPage';
+import { ContentDetailsPage } from './features/content/ContentDetailsPage';
 import { PlayerPage } from './features/player/PlayerPage';
 import { PhasePage } from './features/system/PhasePage';
 import { SearchPage } from './features/search/SearchPage';
 import { SettingsPage } from './features/settings/SettingsPage';
-import { episodes, movies, series } from './data/demo';
 import { FavoritesPage, HistoryPage, WatchlistPage } from './features/library/LibraryViews';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterPage } from './features/auth/RegisterPage';
 import { ProfilePage } from './features/auth/ProfilePage';
-import { Smartphone, Tv } from 'lucide-react';
-
-const demoNote = 'Showing clearly fictional demo data until you connect your own IPTV source.';
+import { Library, Smartphone, Tv } from 'lucide-react';
 
 export function App() {
   return (
@@ -22,41 +22,21 @@ export function App() {
       <Route element={<AppShell />}>
         <Route index element={<HomePage />} />
         <Route path="live" element={<LivePage />} />
-        <Route
-          path="movies"
-          element={
-            <CatalogPage
-              eyebrow="Cinema"
-              title="Movies"
-              description="A showcase of the movie grid and filtering behavior."
-              items={movies}
-              filters={[{ label: 'All', value: 'all' }, { label: 'Movies', value: 'movie' }]}
-              note={demoNote}
-            />
-          }
-        />
-        <Route
-          path="series"
-          element={
-            <CatalogPage
-              eyebrow="Binge-worthy"
-              title="TV Shows"
-              description="Series and episode layouts, ready for your provider catalogue."
-              items={[...series, ...episodes]}
-              note={demoNote}
-            />
-          }
-        />
+        <Route path="movies" element={<MoviesPage />} />
+        <Route path="series" element={<SeriesPage />} />
+        <Route path="series/:id" element={<SeriesDetailPage />} />
+        <Route path="details/:kind/:id" element={<ContentDetailsPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route
           path="library"
           element={
-            <CatalogPage
-              eyebrow="Everything in one place"
+            <PhasePage
+              eyebrow="Personal library"
               title="Library"
-              description="Your imported channels, movies and shows will live here."
-              items={[...movies, ...series, ...episodes]}
-              note={demoNote}
+              description="Favorites, history and watchlist will use your real imported catalogue in a later phase."
+              phase="Phase 7"
+              icon={Library}
+              bullets={['Favorites across providers', 'Continue watching from history', 'Saved watchlist']}
             />
           }
         />

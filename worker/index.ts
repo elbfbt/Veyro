@@ -9,6 +9,7 @@
  * IPTV traffic always flows directly from the user's provider to their device.
  */
 import { createApiHandler } from './api';
+import { ContentService, D1ContentRepository } from './services/content/index';
 import { D1AuthRepository } from './services/auth/d1Repository';
 import { D1RateLimiter } from './services/auth/d1RateLimiter';
 import { WebCryptoPasswordHasher } from './services/auth/password';
@@ -51,11 +52,13 @@ export default {
           fetchText: createBoundedTextFetcher({ accept: 'application/json' }),
         }),
       });
+      const content = new ContentService(new D1ContentRepository(env.DB));
       const handleApi = createApiHandler({
         auth,
         databaseBound: Boolean(env.DB),
         now: () => Math.floor(Date.now() / 1000),
         providers,
+        content,
       });
       return handleApi(request, url);
     }
