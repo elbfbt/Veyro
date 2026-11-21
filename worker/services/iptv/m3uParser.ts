@@ -42,7 +42,7 @@ function deriveName(url: string): string {
 }
 
 function hasStreamScheme(value: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+  return /^https?:\/\//i.test(value);
 }
 
 export function parseM3u(

@@ -79,3 +79,61 @@ describe('M3U parser', () => {
     expect(classifyEntry({ name: 'BBC', groupTitle: 'News', streamUrl: 'https://x.test/live' })).toBe('channel');
   });
 });
+
+describe('M3U parser stream URL scheme safety', () => {
+  it('accepts http:// stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,HTTP Stream\nhttp://stream.example.com/live.m3u8');
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.streamUrl).toBe('http://stream.example.com/live.m3u8');
+    expect(result.malformedEntries).toBe(0);
+  });
+
+  it('accepts https:// stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,HTTPS Stream\nhttps://stream.example.com/live.m3u8');
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.streamUrl).toBe('https://stream.example.com/live.m3u8');
+    expect(result.malformedEntries).toBe(0);
+  });
+
+  it('rejects javascript: stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,Bad Stream\njavascript:alert(1)');
+    expect(result.entries).toHaveLength(0);
+    expect(result.malformedEntries).toBe(1);
+  });
+
+  it('rejects data: stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,Bad Stream\ndata:video/mp4;base64,AAAA');
+    expect(result.entries).toHaveLength(0);
+    expect(result.malformedEntries).toBe(1);
+  });
+
+  it('rejects file: stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,Bad Stream\nfile:///etc/passwd');
+    expect(result.entries).toHaveLength(0);
+    expect(result.malformedEntries).toBe(1);
+  });
+
+  it('rejects ftp: stream URLs', () => {
+    const result = parseM3u('#EXTM3U\n#EXTINF:-1,Bad Stream\nftp://stream.example.com/live.m3u8');
+    expect(result.entries).toHaveLength(0);
+    expect(result.malformedEntries).toBe(1);
+  });
+
+  it('mixes safe and unsafe entries, keeping only HTTP(S)', () => {
+    const result = parseM3u([
+      '#EXTM3U',
+      '#EXTINF:-1,Good',
+      'https://stream.example.com/good.m3u8',
+      '#EXTINF:-1,Bad JS',
+      'javascript:alert(1)',
+      '#EXTINF:-1,Bad Data',
+      'data:video/mp4;base64,AAAA',
+      '#EXTINF:-1,Also Good',
+      'http://stream.example.com/also-good.mp4',
+    ].join('\n'));
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]?.streamUrl).toBe('https://stream.example.com/good.m3u8');
+    expect(result.entries[1]?.streamUrl).toBe('http://stream.example.com/also-good.mp4');
+    expect(result.malformedEntries).toBe(2);
+  });
+});
