@@ -1,15 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, MonitorPlay, Play, ShieldCheck } from 'lucide-react';
+import { AlertCircle, ArrowLeft, MonitorPlay, RefreshCw, ShieldCheck } from 'lucide-react';
 import { getChannelStream, getMovieStream, getEpisodeStream } from '../../lib/contentApi';
 
 type PlayerKind = 'channel' | 'movie' | 'episode';
+
+type PlayerState = 'loading' | 'connecting' | 'buffering' | 'playing' | 'failed';
 
 interface StreamResolution {
   playable: boolean;
   streamUrl?: string;
   reason?: string;
 }
+
+/** Maximum time (ms) to wait for playback to start before treating it as a startup failure. */
+const STARTUP_TIMEOUT_MS = 10_000;
+
+/** Maximum number of automatic retry attempts after a playback failure. */
+const MAX_RETRIES = 3;
+
+/** Base delay (ms) for exponential backoff between automatic retries. */
+const RETRY_BASE_DELAY_MS = 1_000;
 
 export function PlayerPage() {
   const { id = '' } = useParams();
@@ -24,22 +35,43 @@ export function PlayerPage() {
     channelMatch?.params.id ?? movieMatch?.params.id ?? episodeMatch?.params.id ?? id;
 
   const [stream, setStream] = useState<StreamResolution | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [playerState, setPlayerState] = useState<PlayerState>('loading');
   const [apiError, setApiError] = useState<string | null>(null);
   const [playError, setPlayError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const startupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /** Cancel all pending timers to avoid state updates after unmount or state transition. */
+  const clearTimers = useCallback(() => {
+    if (startupTimeoutRef.current) {
+      clearTimeout(startupTimeoutRef.current);
+      startupTimeoutRef.current = null;
+    }
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return clearTimers;
+  }, [clearTimers]);
+
+  // --- Stream resolution -----------------------------------------------------
   useEffect(() => {
     if (!kind || !contentId) {
       setApiError('Invalid player route.');
-      setLoading(false);
+      setPlayerState('failed');
       return;
     }
 
     let active = true;
-    setLoading(true);
+    setPlayerState('loading');
     setApiError(null);
     setPlayError(null);
+    setRetryCount(0);
 
     const load = async () => {
       try {
@@ -54,8 +86,7 @@ export function PlayerPage() {
       } catch (caught) {
         if (!active) return;
         setApiError(caught instanceof Error ? caught.message : 'Could not resolve stream.');
-      } finally {
-        if (active) setLoading(false);
+        setPlayerState('failed');
       }
     };
 
@@ -65,6 +96,76 @@ export function PlayerPage() {
     };
   }, [kind, contentId]);
 
+  // Transition from loading to connecting once a playable stream is available.
+  useEffect(() => {
+    if (stream?.playable && playerState === 'loading') {
+      setPlayerState('connecting');
+    }
+  }, [stream, playerState]);
+
+  // Transition from loading to failed when the stream is resolved but not playable
+  // (e.g. Xtream providers where web playback is unsupported). This ensures the
+  // "Web playback not supported" message is shown instead of being stuck in loading.
+  useEffect(() => {
+    if (stream && !stream.playable && playerState === 'loading') {
+      setPlayerState('failed');
+    }
+  }, [stream, playerState]);
+
+  // --- Startup timeout -------------------------------------------------------
+  // Fires if playback does not reach the 'playing' state within the timeout
+  // while in the 'connecting' state. Distinguishable from buffering because
+  // buffering only applies after playback has started.
+  useEffect(() => {
+    if (playerState !== 'connecting') {
+      if (startupTimeoutRef.current) {
+        clearTimeout(startupTimeoutRef.current);
+        startupTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    startupTimeoutRef.current = setTimeout(() => {
+      setPlayerState('failed');
+      setPlayError('Stream failed to start within the timeout period.');
+    }, STARTUP_TIMEOUT_MS);
+
+    return () => {
+      if (startupTimeoutRef.current) {
+        clearTimeout(startupTimeoutRef.current);
+        startupTimeoutRef.current = null;
+      }
+    };
+  }, [playerState]);
+
+  // --- Automatic retry with exponential backoff ------------------------------
+  // Retries automatically up to MAX_RETRIES times. After that, only a manual
+  // Retry action remains available. Backoff: 1s, 2s, 4s.
+  useEffect(() => {
+    if (playerState !== 'failed' || retryCount >= MAX_RETRIES) {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const delay = RETRY_BASE_DELAY_MS * 2 ** retryCount;
+    retryTimeoutRef.current = setTimeout(() => {
+      if (playerState !== 'failed') return;
+      attemptRetry();
+    }, delay);
+
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerState, retryCount]);
+
+  // --- Video event handlers --------------------------------------------------
   const handlePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -76,12 +177,21 @@ export function PlayerPage() {
     }
   }, []);
 
+  // Attempt autoplay when entering the connecting state. If the browser blocks
+  // autoplay, the rejection is caught and a manual-start prompt is shown.
+  useEffect(() => {
+    if (playerState === 'connecting') {
+      void handlePlay();
+    }
+  }, [playerState, handlePlay]);
+
   const handleVideoError = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     const err = video.error;
     if (!err) {
       setPlayError('Playback failed.');
+      setPlayerState('failed');
       return;
     }
     const messages: Record<number, string> = {
@@ -91,8 +201,50 @@ export function PlayerPage() {
       4: 'The stream could not be decrypted or is not accessible.',
     };
     setPlayError(messages[err.code] ?? 'Playback failed.');
+    setPlayerState('failed');
   }, []);
 
+  const handleVideoWaiting = useCallback(() => {
+    // The video has paused to buffer. Only mark buffering if we were
+    // connecting or playing; an initial waiting before play has started is
+    // still part of the startup phase and covered by the startup timeout.
+    if (playerState === 'connecting' || playerState === 'playing') {
+      setPlayerState('buffering');
+    }
+  }, [playerState]);
+
+  const handleVideoPlaying = useCallback(() => {
+    setPlayerState('playing');
+    setPlayError(null);
+  }, []);
+
+  const attemptRetry = useCallback(() => {
+    if (retryCount >= MAX_RETRIES) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    setRetryCount((prev) => prev + 1);
+    setPlayError(null);
+    setPlayerState('connecting');
+
+    // Reload the video element to attempt recovery from a transient failure.
+    video.load();
+  }, [retryCount]);
+
+  const handleManualRetry = useCallback(() => {
+    setRetryCount(0);
+    setPlayError(null);
+    setPlayerState('connecting');
+    const video = videoRef.current;
+    if (video) {
+      video.load();
+    }
+    // Re-attempt playback in case playerState was already 'connecting'
+    // (the effect above only fires on state transitions).
+    void handlePlay();
+  }, [handlePlay]);
+
+  // --- Render ----------------------------------------------------------------
   if (!kind) {
     return (
       <div className="inner-page phase-page">
@@ -104,7 +256,7 @@ export function PlayerPage() {
     );
   }
 
-  if (loading) {
+  if (playerState === 'loading') {
     return (
       <div className="inner-page player-page">
         <p className="provider-message">Resolving stream…</p>
@@ -166,6 +318,8 @@ export function PlayerPage() {
   };
   const canPlay = isHls ? probe('application/vnd.apple.mpegurl') : probe('video/mp4');
 
+  const autoRetryAvailable = retryCount < MAX_RETRIES;
+
   return (
     <div className="player-page">
       <div className="player-frame">
@@ -177,16 +331,26 @@ export function PlayerPage() {
         </span>
         <div className="player-frame__center">
           {canPlay ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              onError={handleVideoError}
-              className="player-video"
-              onPlay={() => setPlayError(null)}
-            >
-              <source src={streamUrl} />
-            </video>
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                onError={handleVideoError}
+                onWaiting={handleVideoWaiting}
+                onPlaying={handleVideoPlaying}
+                className="player-video" data-testid="player-video"
+                onPlay={() => setPlayError(null)}
+              >
+                <source src={streamUrl} />
+              </video>
+              {playerState === 'buffering' && (
+                <div className="player-buffering">
+                  <AlertCircle size={24} />
+                  <p>Buffering…</p>
+                </div>
+              )}
+            </>
           ) : null}
           {!canPlay && !playError ? (
             <div className="player-frame__unsupported">
@@ -201,10 +365,22 @@ export function PlayerPage() {
             </div>
           ) : null}
           {playError && (
-            <button type="button" className="button button--primary" onClick={handlePlay}>
-              <Play size={18} />
-              {playError.includes('blocked') ? 'Click to Play' : 'Retry Playback'}
-            </button>
+            <div className="player-error">
+              <p>{playError}</p>
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={handleManualRetry}
+              >
+                <RefreshCw size={18} />
+                {playError.includes('blocked') ? 'Click to Play' : 'Retry Playback'}
+              </button>
+              {!autoRetryAvailable && (
+                <p className="player-error__terminal">
+                  Automatic retries exhausted. Try again manually when ready.
+                </p>
+              )}
+            </div>
           )}
         </div>
       </div>
