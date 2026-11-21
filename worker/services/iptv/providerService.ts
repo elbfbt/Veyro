@@ -79,6 +79,7 @@ function toView(provider: StoredProvider): ProviderView {
     lastImport: (provider.metadata.lastImport as Record<string, unknown> | undefined) ?? null,
     lastError: typeof provider.metadata.lastError === 'string' ? provider.metadata.lastError : null,
     xtreamUsername: typeof provider.metadata.xtreamUsername === 'string' ? provider.metadata.xtreamUsername : null,
+    importing: provider.metadata.import_status === 'importing',
     createdAt: provider.createdAt,
     updatedAt: provider.updatedAt,
   };
@@ -479,16 +480,102 @@ export class ProviderService {
       }
     }
 
-    const keys = await this.repository.loadCatalogKeys(userId, job.providerId);
-    await this.repository.saveCatalog(
-      userId,
-      job.providerId,
-      entries,
-      keys,
-      this.ids,
-      now,
-    );
+    // Write catalogue entries. If a concurrent request already inserted the
+    // same entries, the UNIQUE constraint on (provider_id, external_id) will
+    // be violated. We recover by checking whether the job state was already
+    // advanced by the concurrent request.
+    try {
+      const keys = await this.repository.loadCatalogKeys(userId, job.providerId);
+      await this.repository.saveCatalog(
+        userId,
+        job.providerId,
+        entries,
+        keys,
+        this.ids,
+        now,
+      );
+    } catch (error) {
+      const isUniqueViolation =
+        error instanceof Error && /UNIQUE constraint failed/.test(error.message);
+      if (!isUniqueViolation) throw error;
 
+      // Concurrent request already wrote these catalogue entries. Re-read the
+      // job state to see whether the other request already advanced it.
+      const refreshedJob = await this.repository.getImportJob(userId, jobId, now);
+      if (!refreshedJob) {
+        throw new ProviderError('not_found', 404, 'Import job not found.');
+      }
+
+      // The other request already completed this chunk — idempotent success.
+      if (refreshedJob.completedChunks > chunkIndex) {
+        if (
+          refreshedJob.lastProcessedChunk === chunkIndex &&
+          refreshedJob.lastChunkHash
+        ) {
+          const retryHash = await hashChunkPayload(entries);
+          if (retryHash !== refreshedJob.lastChunkHash) {
+            throw new ProviderError(
+              'validation_error',
+              409,
+              `Chunk ${chunkIndex} already processed with a different payload.`,
+            );
+          }
+        }
+        return {
+          chunkIndex,
+          status: refreshedJob.status === 'completed' ? 'completed' : 'importing',
+          importedEntries: refreshedJob.importedEntries,
+        };
+      }
+
+      // The other request is also processing this chunk. Try to atomically
+      // advance the job state — the catalogue entries already exist.
+      if (refreshedJob.completedChunks !== chunkIndex) {
+        throw new ProviderError(
+          'validation_error',
+          409,
+          'Chunk was processed by another request. Retry with the next chunk.',
+        );
+      }
+
+      const chunkHash = await hashChunkPayload(entries);
+      const advanced = await this.repository.updateImportJob(
+        userId,
+        jobId,
+        {
+          importedEntries: refreshedJob.importedEntries + entries.length,
+          completedChunks: refreshedJob.completedChunks + 1,
+          lastProcessedChunk: chunkIndex,
+          lastChunkHash: chunkHash,
+          status:
+            refreshedJob.completedChunks + 1 >= refreshedJob.totalChunks
+              ? 'completed'
+              : 'importing',
+        },
+        now,
+        refreshedJob.completedChunks,
+        refreshedJob.lastProcessedChunk,
+      );
+
+      if (!advanced) {
+        throw new ProviderError(
+          'validation_error',
+          409,
+          'Chunk was processed by another request. Retry with the next chunk.',
+        );
+      }
+
+      return {
+        chunkIndex,
+        status:
+          refreshedJob.completedChunks + 1 >= refreshedJob.totalChunks
+            ? 'completed'
+            : 'importing',
+        importedEntries: refreshedJob.importedEntries + entries.length,
+      };
+    }
+
+    // Normal (non-concurrent) path: catalogue was written by this request.
     const importedEntries = job.importedEntries + entries.length;
     const completedChunks = job.completedChunks + 1;
     const isFinal = completedChunks >= job.totalChunks;
@@ -505,11 +592,25 @@ export class ProviderService {
         status: isFinal ? 'completed' : 'importing',
       },
       now,
-      job.completedChunks,   // expected completed_chunks
-      job.lastProcessedChunk, // expected last_processed_chunk
+      job.completedChunks,
+      job.lastProcessedChunk,
     );
 
     if (!advanced) {
+      // Another request advanced the state between our catalogue write and
+      // this update. The catalogue entries are already persisted. Re-read the
+      // job to report the correct state.
+      const refreshedJob = await this.repository.getImportJob(userId, jobId, now);
+      if (!refreshedJob) {
+        throw new ProviderError('not_found', 404, 'Import job not found.');
+      }
+      if (refreshedJob.completedChunks > chunkIndex) {
+        return {
+          chunkIndex,
+          status: refreshedJob.status === 'completed' ? 'completed' : 'importing',
+          importedEntries: refreshedJob.importedEntries,
+        };
+      }
       throw new ProviderError(
         'validation_error',
         409,

@@ -26,6 +26,8 @@ export interface Provider {
   lastImport: ProviderImportStats | null;
   lastError: string | null;
   xtreamUsername: string | null;
+  /** True while a chunked import is in progress for this provider. */
+  importing: boolean;
   createdAt: number;
   updatedAt: number;
 }

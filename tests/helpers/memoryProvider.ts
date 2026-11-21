@@ -139,8 +139,10 @@ export class MemoryProviderRepository implements ProviderRepository {
     expectedCompletedChunks?: number,
     expectedLastProcessedChunk?: number,
   ) {
-    const job = await this.getImportJob(userId, jobId, now);
-    if (!job) return false;
+    // Synchronous check-and-set: no await between reading and writing the Map,
+    // so no other request can interleave between the check and the update.
+    const job = this.importJobs.get(jobId);
+    if (!job || job.userId !== userId || job.expiresAt <= now) return false;
 
     // Atomic sequencing: only advance if the job is still at the expected position.
     if (expectedCompletedChunks !== undefined && job.completedChunks !== expectedCompletedChunks) {

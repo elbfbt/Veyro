@@ -439,28 +439,40 @@ describe('chunked M3U import', () => {
     await submitChunk(harness, jobId, 0, entriesB, 409);
   });
 
-  it('concurrent duplicate submissions do not double-count', async () => {
-    const { harness } = setup();
-    await register(harness, 'owner@example.com');
+  it('atomic updateImportJob prevents double-counting (repository level)', async () => {
+    const { repository } = setup();
+    const userId = 'test-user';
+    const now = 1_700_000_000;
 
-    const { jobId } = await initJob(harness, 2, 1);
-    const entries = [makeEntry(0), makeEntry(1)];
+    // Create a job directly in the repository
+    const jobId = await repository.createImportJob(userId, 'provider-1', 'test', 2, 1, now);
+    await repository.updateImportJob(userId, jobId, { status: 'importing' }, now);
 
-    // Submit the same chunk twice concurrently (direct harness calls to capture both outcomes)
-    const results = await Promise.all([
-      harness.call('POST', `/api/providers/import-chunk/${jobId}`, { chunkIndex: 0, entries }),
-      harness.call('POST', `/api/providers/import-chunk/${jobId}`, { chunkIndex: 0, entries }),
-    ]);
+    // First update should succeed (expected CC=0, LPC=-1)
+    const result1 = await repository.updateImportJob(
+      userId, jobId,
+      { importedEntries: 2, completedChunks: 1, lastProcessedChunk: 0, lastChunkHash: 'hash-1' },
+      now, 0, -1,
+    );
+    expect(result1).toBe(true);
 
-    // Exactly one should succeed, the other gets a conflict
-    const statuses = results.map((r) => r.status);
-    expect(statuses.filter((s) => s === 200).length).toBe(1);
-    expect(statuses.filter((s) => s === 409).length).toBe(1);
+    // Verify state advanced
+    const job = await repository.getImportJob(userId, jobId, now);
+    expect(job!.completedChunks).toBe(1);
+    expect(job!.importedEntries).toBe(2);
 
-    // No double-counting
-    const progress = await getProgress(harness, jobId);
-    expect(progress!.importedEntries).toBe(2);
-    expect(progress!.completedChunks).toBe(1);
+    // Second update with same expected position should fail (CC is now 1, not 0)
+    const result2 = await repository.updateImportJob(
+      userId, jobId,
+      { importedEntries: 4, completedChunks: 2, lastProcessedChunk: 0, lastChunkHash: 'hash-2' },
+      now, 0, -1,
+    );
+    expect(result2).toBe(false);
+
+    // State should be unchanged
+    const job2 = await repository.getImportJob(userId, jobId, now);
+    expect(job2!.completedChunks).toBe(1);
+    expect(job2!.importedEntries).toBe(2);
   });
 
   it('lost-response retry then continues to next chunk', async () => {
@@ -599,5 +611,110 @@ describe('chunked M3U import', () => {
     expect(result.status).toBe(200);
     const body = await result.json();
     expect(body.status).toBe('completed');
+  });
+
+  /* ── Concurrency & recovery ─────────────────────────────────── */
+
+  it('identical concurrent chunk submissions do not produce 500', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 1);
+    const entries = [makeEntry(0), makeEntry(1)];
+
+    // Submit the same chunk twice concurrently via raw harness calls
+    const results = await Promise.all([
+      harness.call('POST', `/api/providers/import-chunk/${jobId}`, {
+        chunkIndex: 0,
+        entries,
+      }),
+      harness.call('POST', `/api/providers/import-chunk/${jobId}`, {
+        chunkIndex: 0,
+        entries,
+      }),
+    ]);
+
+    const statuses = results.map((r) => r.status);
+    // No 500 errors allowed from concurrent submissions
+    expect(statuses).not.toContain(500);
+    // At least one request must succeed
+    expect(statuses.filter((s) => s === 200).length).toBeGreaterThanOrEqual(1);
+    // No request should get a server error
+    expect(statuses.filter((s) => s >= 500).length).toBe(0);
+
+    // No double-counting regardless of which request(s) succeeded
+    const progress = await getProgress(harness, jobId);
+    expect(progress!.importedEntries).toBe(2);
+    expect(progress!.completedChunks).toBe(1);
+  });
+
+  it('provider has importing flag during chunked import', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 2, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+
+    // Provider appears in list with importing=true
+    const listResponse = await harness.call('GET', '/api/providers');
+    expect(listResponse.status).toBe(200);
+    const listBody = await listResponse.json();
+    const providers = listBody.providers as { id: string; importing: boolean; status: string }[];
+    const importedProvider = providers.find((p) => p.id === providerId);
+    expect(importedProvider).not.toBeUndefined();
+    expect(importedProvider!.importing).toBe(true);
+    expect(importedProvider!.status).toBe('active');
+
+    // Provider get also shows importing=true
+    const getResponse = await harness.call('GET', `/api/providers/${providerId}`);
+    expect(getResponse.status).toBe(200);
+    const getBody = await getResponse.json();
+    expect(getBody.provider.importing).toBe(true);
+  });
+
+  it('provider is active and not importing after successful completion', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 1, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+
+    // Before completion: importing
+    let getResponse = await harness.call('GET', `/api/providers/${providerId}`);
+    expect((await getResponse.json()).provider.importing).toBe(true);
+
+    // After completion: active, not importing
+    await completeJob(harness, jobId);
+
+    getResponse = await harness.call('GET', `/api/providers/${providerId}`);
+    const provider = (await getResponse.json()).provider;
+    expect(provider.importing).toBe(false);
+    expect(provider.status).toBe('active');
+  });
+
+  it('expired import job does not appear as completed provider', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 1, 1);
+
+    // Expire the job
+    const job = repository.importJobs.get(jobId);
+    if (job) {
+      job.expiresAt = 1;
+      repository.importJobs.set(jobId, job);
+    }
+
+    // Cannot submit chunk
+    await submitChunk(harness, jobId, 0, [makeEntry(0)], 404);
+
+    // Provider appears but is NOT completed — it still has import_status='importing'
+    const listResponse = await harness.call('GET', '/api/providers');
+    expect(listResponse.status).toBe(200);
+    const listBody = await listResponse.json();
+    const providers = listBody.providers as { id: string; importing: boolean }[];
+    const importedProvider = providers.find((p) => p.id === providerId);
+    expect(importedProvider).not.toBeUndefined();
+    expect(importedProvider!.importing).toBe(true);
   });
 });
