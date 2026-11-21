@@ -1,0 +1,45 @@
+{
+  "name": "veyro",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Veyro — a user-supplied IPTV client for web, phone and future TV devices.",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev --port 8787",
+    "dev:all": "concurrently -k -n web,worker -c cyan,magenta \"npm run dev\" \"npm run dev:worker\"",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build:worker": "wrangler deploy --dry-run --outdir dist/worker",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run build:worker",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261119.1",
+    "@eslint/js": "^9.17.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.166.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
