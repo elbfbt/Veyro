@@ -1,5 +1,5 @@
 import { toBase64Url } from '../auth/tokens';
-import type { CatalogCategory, ImportStats, M3uEntry, ProviderStatus, ProviderType, StoredProvider } from './types';
+import type { CatalogCategory, ImportJob, ImportJobStatus, ImportStats, M3uEntry, ProviderStatus, ProviderType, StoredProvider } from './types';
 
 // Minimal structural subset of D1 so this module also typechecks in the SPA config.
 type BindValue = string | number | boolean | null | ArrayBuffer | Uint8Array;
@@ -747,6 +747,94 @@ export class D1ProviderRepository {
       await this.monitoredBatch('catalog.legacy-upsert-chunk', statements.slice(index, index + CHUNK_SIZE));
     }
     return { added, updated, categoriesAdded };
+  }
+
+  async createImportJob(
+    userId: string,
+    providerId: string,
+    filename: string,
+    totalEntries: number,
+    totalChunks: number,
+    now: number,
+  ): Promise<string> {
+    const jobId = crypto.randomUUID();
+    const expiresAt = now + 24 * 60 * 60; // 24 hours
+    await this.monitoredBatch('import_job.create', [
+      this.db
+        .prepare(
+          'INSERT INTO import_jobs (id, user_id, provider_id, filename, total_entries, total_chunks, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .bind(jobId, userId, providerId, filename, totalEntries, totalChunks, 'pending', now, now, expiresAt),
+    ]);
+    return jobId;
+  }
+
+  async getImportJob(userId: string, jobId: string): Promise<ImportJob | null> {
+    const row = await this.db
+      .prepare(
+        'SELECT id, user_id, provider_id, filename, total_entries, imported_entries, total_chunks, completed_chunks, status, error, created_at, updated_at, expires_at FROM import_jobs WHERE id = ? AND user_id = ?',
+      )
+      .bind(jobId, userId)
+      .first<{
+        id: string;
+        user_id: string;
+        provider_id: string;
+        filename: string;
+        total_entries: number;
+        imported_entries: number;
+        total_chunks: number;
+        completed_chunks: number;
+        status: ImportJobStatus;
+        error: string | null;
+        created_at: number;
+        updated_at: number;
+        expires_at: number;
+      }>();
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      providerId: row.provider_id,
+      filename: row.filename,
+      totalEntries: row.total_entries,
+      importedEntries: row.imported_entries,
+      totalChunks: row.total_chunks,
+      completedChunks: row.completed_chunks,
+      status: row.status,
+      error: row.error,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  async updateImportJob(
+    userId: string,
+    jobId: string,
+    patch: Partial<Pick<ImportJob, 'importedEntries' | 'completedChunks' | 'status' | 'error' | 'updatedAt'>>,
+    now: number,
+  ): Promise<boolean> {
+    const columns: string[] = [];
+    const values: BindValue[] = [];
+    const fields: Array<[string, BindValue | undefined]> = [
+      ['imported_entries', patch.importedEntries !== undefined ? patch.importedEntries : undefined],
+      ['completed_chunks', patch.completedChunks !== undefined ? patch.completedChunks : undefined],
+      ['status', patch.status !== undefined ? patch.status : undefined],
+      ['error', patch.error !== undefined ? patch.error : undefined],
+      ['updated_at', now],
+    ];
+    for (const [column, value] of fields) {
+      if (value !== undefined) {
+        columns.push(`${column} = ?`);
+        values.push(value);
+      }
+    }
+    if (columns.length === 0) return true;
+    const result = await this.monitoredRun(
+      'import_job.update',
+      this.db.prepare(`UPDATE import_jobs SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`).bind(...values, jobId, userId),
+    );
+    return (result.meta.changes ?? 0) > 0;
   }
 
 }

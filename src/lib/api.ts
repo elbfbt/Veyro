@@ -70,3 +70,57 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   }
   return body as T;
 }
+
+export interface ImportInitInput {
+  name: string;
+  totalEntries: number;
+  totalChunks: number;
+  chunkSize: number;
+  fileSize: number;
+}
+
+export interface ImportChunkInput {
+  chunkIndex: number;
+  entries: unknown[];
+}
+
+/** Initialize a chunked import job. Returns the job id and pre-created provider id. */
+export async function importInit(input: ImportInitInput): Promise<{ jobId: string; providerId: string }> {
+  return apiRequest('/api/providers/import-init', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/** Submit one chunk of entries for an import job. */
+export async function importChunk(
+  jobId: string,
+  input: ImportChunkInput,
+): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }> {
+  return apiRequest(`/api/providers/import-chunk/${jobId}`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/** Get import job progress. */
+export async function getImportProgress(jobId: string): Promise<{
+  jobId: string;
+  status: string;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  percentage: number;
+  error: string | null;
+  providerId: string;
+}> {
+  return apiRequest(`/api/providers/import/${jobId}/progress`);
+}
+
+/** Mark an import job complete and return the provider. */
+export async function importComplete(jobId: string): Promise<{ provider: { id: string; name: string } }> {
+  return apiRequest(`/api/providers/import-complete/${jobId}`, {
+    method: 'POST',
+  });
+}

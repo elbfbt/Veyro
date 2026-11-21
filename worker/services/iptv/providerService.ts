@@ -7,6 +7,7 @@ import { XtreamClient, XtreamClientError } from './xtreamClient';
 import type {
   ConnectionTestResult,
   CreateProviderInput,
+  ImportProgress,
   ImportStats,
   M3uEntry,
   PlaylistFetcher,
@@ -25,6 +26,22 @@ export class ProviderError extends Error {
   ) {
     super(message);
     this.name = 'ProviderError';
+  }
+}
+
+/** Maximum number of entries accepted in a single M3U file import. */
+const MAX_TOTAL_ENTRIES = 100_000;
+
+/** Number of entries imported per chunked request. */
+const CHUNK_SIZE = 1_000;
+
+/** Only HTTP(S) stream URLs are safe for browser playback. */
+function isSafeStreamUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
@@ -326,6 +343,178 @@ export class ProviderService {
       throw error;
     }
     return this.get(userId, provider.id);
+  }
+
+  async importInit(
+    userId: string,
+    name: string,
+    totalEntries: number,
+    totalChunks: number,
+    chunkSize: number,
+    _fileSize: number,
+  ): Promise<{ jobId: string; providerId: string }> {
+    const providerName = validName(name);
+    const now = this.clock.now();
+
+    if (totalEntries > MAX_TOTAL_ENTRIES) {
+      throw new ProviderError('playlist_too_large', 413, `Playlist exceeds ${MAX_TOTAL_ENTRIES} entry limit.`);
+    }
+    if (totalEntries <= 0) {
+      throw new ProviderError('validation_error', 400, 'Playlist contains no entries.');
+    }
+    if (totalChunks <= 0 || chunkSize <= 0 || totalChunks * chunkSize < totalEntries) {
+      throw new ProviderError('validation_error', 400, 'Invalid chunk parameters.');
+    }
+
+    const provider = await this.create(userId, {
+      name: providerName,
+      type: 'm3u_file',
+    });
+    const stored = await this.owned(userId, provider.id);
+
+    const jobId = await this.repository.createImportJob(
+      userId,
+      stored.id,
+      name,
+      totalEntries,
+      totalChunks,
+      now,
+    );
+
+    await this.repository.updateImportJob(userId, jobId, { status: 'importing' }, now);
+
+    return { jobId, providerId: stored.id };
+  }
+
+  async importChunk(
+    userId: string,
+    jobId: string,
+    chunkIndex: number,
+    entries: M3uEntry[],
+  ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }> {
+    const now = this.clock.now();
+
+    const job = await this.repository.getImportJob(userId, jobId);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    if (job.status !== 'importing') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        `Import job is not active (status: ${job.status}).`,
+      );
+    }
+
+    if (chunkIndex < 0 || chunkIndex >= job.totalChunks) {
+      throw new ProviderError('validation_error', 400, 'Chunk index out of range.');
+    }
+
+    if (chunkIndex !== job.completedChunks) {
+      throw new ProviderError(
+        'validation_error',
+        409,
+        `Chunks must be submitted sequentially. Expected chunk ${job.completedChunks}, received ${chunkIndex}.`,
+      );
+    }
+
+    if (entries.length > CHUNK_SIZE) {
+      throw new ProviderError('validation_error', 400, `Chunk exceeds ${CHUNK_SIZE} entry limit.`);
+    }
+
+    // Validate every entry's stream URL before writing
+    for (const entry of entries) {
+      if (!entry.streamUrl || !isSafeStreamUrl(entry.streamUrl)) {
+        throw new ProviderError(
+          'unsafe_url',
+          400,
+          `Entry "${entry.name}" has an unsafe stream URL.`,
+        );
+      }
+      if (!entry.externalId || !entry.name) {
+        throw new ProviderError('validation_error', 400, 'Entry missing required fields.');
+      }
+    }
+
+    const keys = await this.repository.loadCatalogKeys(userId, job.providerId);
+    await this.repository.saveCatalog(
+      userId,
+      job.providerId,
+      entries,
+      keys,
+      this.ids,
+      now,
+    );
+
+    const importedEntries = job.importedEntries + entries.length;
+    const completedChunks = job.completedChunks + 1;
+    const isFinal = completedChunks >= job.totalChunks;
+
+    await this.repository.updateImportJob(
+      userId,
+      jobId,
+      {
+        importedEntries,
+        completedChunks,
+        status: isFinal ? 'completed' : 'importing',
+      },
+      now,
+    );
+
+    return {
+      chunkIndex,
+      status: isFinal ? 'completed' : 'completed',
+      importedEntries,
+    };
+  }
+
+  async getImportProgress(userId: string, jobId: string): Promise<ImportProgress> {
+    const job = await this.repository.getImportJob(userId, jobId);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    const percentage = job.totalEntries > 0
+      ? Math.round((job.importedEntries / job.totalEntries) * 100)
+      : 0;
+
+    return {
+      jobId: job.id,
+      status: job.status,
+      totalEntries: job.totalEntries,
+      importedEntries: job.importedEntries,
+      totalChunks: job.totalChunks,
+      completedChunks: job.completedChunks,
+      percentage,
+      error: job.error,
+      providerId: job.providerId,
+    };
+  }
+
+  async importComplete(userId: string, jobId: string): Promise<ProviderView> {
+    const job = await this.repository.getImportJob(userId, jobId);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    if (job.status !== 'completed') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        `Import job is not completed (status: ${job.status}).`,
+      );
+    }
+
+    if (job.importedEntries < job.totalEntries) {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        'Import incomplete: not all entries were processed.',
+      );
+    }
+
+    return this.get(userId, job.providerId);
   }
 
   private async importText(userId: string, provider: StoredProvider, content: string): Promise<ImportStats> {

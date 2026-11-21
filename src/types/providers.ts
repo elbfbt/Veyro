@@ -34,3 +34,28 @@ export interface ConnectionTestResult {
   ok: boolean;
   status: 'reachable' | 'unreachable' | 'local' | 'unsupported';
 }
+
+export type ImportJobStatus = 'pending' | 'importing' | 'completed' | 'failed' | 'expired';
+
+export interface ImportJobProgress {
+  jobId: string;
+  status: ImportJobStatus;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  percentage: number;
+  error: string | null;
+  providerId: string;
+}
+
+export interface ImportInitResult {
+  jobId: string;
+  providerId: string;
+}
+
+export interface ImportChunkResult {
+  chunkIndex: number;
+  status: 'completed' | 'skipped';
+  importedEntries: number;
+}

@@ -1,7 +1,9 @@
 import type {
   CatalogCategory,
   CatalogKeysView,
+  ImportJob,
   ImportStats,
+  ImportJobStatus,
   M3uEntry,
   ProviderRepository,
   StoredProvider,
@@ -12,6 +14,7 @@ export class MemoryProviderRepository implements ProviderRepository {
   readonly catalog = new Map<string, M3uEntry[]>();
   readonly categories = new Map<string, CatalogCategory[]>();
   readonly imports = new Map<string, ImportStats>();
+  readonly importJobs = new Map<string, ImportJob>();
 
   private key(userId: string, id: string) {
     return `${userId}:${id}`;
@@ -90,5 +93,46 @@ export class MemoryProviderRepository implements ProviderRepository {
     }
     this.imports.set(providerId, stats);
     return 'playlist-id';
+  }
+
+  async createImportJob(
+    _userId: string,
+    providerId: string,
+    filename: string,
+    totalEntries: number,
+    totalChunks: number,
+    now: number,
+  ) {
+    const id = `import-job-${Math.random().toString(36).slice(2)}`;
+    const job: ImportJob = {
+      id,
+      userId: _userId,
+      providerId,
+      filename,
+      totalEntries,
+      importedEntries: 0,
+      totalChunks,
+      completedChunks: 0,
+      status: 'pending' as ImportJobStatus,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + 24 * 60 * 60 * 1000,
+    };
+    this.importJobs.set(id, job);
+    return id;
+  }
+
+  async getImportJob(userId: string, jobId: string) {
+    const job = this.importJobs.get(jobId);
+    if (!job || job.userId !== userId) return null;
+    return job;
+  }
+
+  async updateImportJob(userId: string, jobId: string, patch: Partial<ImportJob>, now: number) {
+    const job = await this.getImportJob(userId, jobId);
+    if (!job) return false;
+    this.importJobs.set(jobId, { ...job, ...patch, updatedAt: now });
+    return true;
   }
 }

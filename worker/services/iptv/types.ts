@@ -139,6 +139,49 @@ export interface CatalogKeysView {
   categories: Map<string, string>;
 }
 
+export type ImportJobStatus = 'pending' | 'importing' | 'completed' | 'failed' | 'expired';
+
+export interface ImportJob {
+  id: string;
+  userId: string;
+  providerId: string;
+  filename: string;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  status: ImportJobStatus;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface ImportInitInput {
+  name: string;
+  totalEntries: number;
+  totalChunks: number;
+  chunkSize: number;
+  fileSize: number;
+}
+
+export interface ImportChunkInput {
+  chunkIndex: number;
+  entries: M3uEntry[];
+}
+
+export interface ImportProgress {
+  jobId: string;
+  status: ImportJobStatus;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  percentage: number;
+  error: string | null;
+  providerId: string;
+}
+
 export interface ProviderRepository {
   list(userId: string): Promise<StoredProvider[]>;
   find(userId: string, id: string): Promise<StoredProvider | null>;
@@ -157,4 +200,19 @@ export interface ProviderRepository {
     now: number,
     categories?: CatalogCategory[],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }>;
+  createImportJob(
+    userId: string,
+    providerId: string,
+    filename: string,
+    totalEntries: number,
+    totalChunks: number,
+    now: number,
+  ): Promise<string>;
+  getImportJob(userId: string, jobId: string): Promise<ImportJob | null>;
+  updateImportJob(
+    userId: string,
+    jobId: string,
+    patch: Partial<ImportJob>,
+    now: number,
+  ): Promise<boolean>;
 }

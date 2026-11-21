@@ -3,7 +3,15 @@ import { PlaylistLimitError } from './m3uParser';
 import { ProviderError, isProviderError } from './providerService';
 import { UnsafeUrlError } from './urlSafety';
 import { XtreamClientError } from './xtreamClient';
-import type { ConnectionTestResult, ImportStats, ProviderView, UpdateProviderInput, CreateProviderInput } from './types';
+import type {
+  ConnectionTestResult,
+  ImportProgress,
+  ImportStats,
+  M3uEntry,
+  ProviderView,
+  UpdateProviderInput,
+  CreateProviderInput,
+} from './types';
 
 const JSON_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
@@ -25,6 +33,22 @@ export interface ProviderApiService {
   test(userId: string, id: string): Promise<ConnectionTestResult>;
   refresh(userId: string, id: string): Promise<ImportStats>;
   importFile(userId: string, name: string, content: string): Promise<ProviderView>;
+  importInit(
+    userId: string,
+    name: string,
+    totalEntries: number,
+    totalChunks: number,
+    chunkSize: number,
+    fileSize: number,
+  ): Promise<{ jobId: string; providerId: string }>;
+  importChunk(
+    userId: string,
+    jobId: string,
+    chunkIndex: number,
+    entries: M3uEntry[],
+  ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }>;
+  getImportProgress(userId: string, jobId: string): Promise<ImportProgress>;
+  importComplete(userId: string, jobId: string): Promise<ProviderView>;
 }
 
 function errorResponse(error: unknown): Response {
@@ -98,6 +122,74 @@ async function importFile(request: Request, service: ProviderApiService, userId:
   return json({ provider, imported: true });
 }
 
+async function importInit(
+  request: Request,
+  service: ProviderApiService,
+  userId: string,
+): Promise<Response> {
+  const body = await readJson(request);
+  const name = stringValue(body.name);
+  const totalEntries = typeof body.totalEntries === 'number' ? body.totalEntries : 0;
+  const totalChunks = typeof body.totalChunks === 'number' ? body.totalChunks : 0;
+  const chunkSize = typeof body.chunkSize === 'number' ? body.chunkSize : 0;
+  const fileSize = typeof body.fileSize === 'number' ? body.fileSize : 0;
+
+  if (!name) {
+    throw new ProviderError('validation_error', 400, 'Provider name is required.');
+  }
+
+  const result = await service.importInit(userId, name, totalEntries, totalChunks, chunkSize, fileSize);
+  return json({ jobId: result.jobId, providerId: result.providerId }, 201);
+}
+
+async function importChunkRoute(
+  request: Request,
+  service: ProviderApiService,
+  userId: string,
+  jobId: string,
+): Promise<Response> {
+  const body = await readJson(request);
+  const chunkIndex = typeof body.chunkIndex === 'number' ? body.chunkIndex : -1;
+  const entries = Array.isArray(body.entries) ? body.entries : [];
+
+  const result = await service.importChunk(userId, jobId, chunkIndex, entries);
+  return json({
+    chunkIndex: result.chunkIndex,
+    status: result.status,
+    importedEntries: result.importedEntries,
+  });
+}
+
+async function getProgressRoute(
+  _request: Request,
+  service: ProviderApiService,
+  userId: string,
+  jobId: string,
+): Promise<Response> {
+  const progress = await service.getImportProgress(userId, jobId);
+  return json({
+    jobId: progress.jobId,
+    status: progress.status,
+    totalEntries: progress.totalEntries,
+    importedEntries: progress.importedEntries,
+    totalChunks: progress.totalChunks,
+    completedChunks: progress.completedChunks,
+    percentage: progress.percentage,
+    error: progress.error,
+    providerId: progress.providerId,
+  });
+}
+
+async function importCompleteRoute(
+  _request: Request,
+  service: ProviderApiService,
+  userId: string,
+  jobId: string,
+): Promise<Response> {
+  const provider = await service.importComplete(userId, jobId);
+  return json({ provider });
+}
+
 /** Returns null for non-provider routes so api.ts can continue routing. */
 export async function handleProviderApi(
   request: Request,
@@ -119,7 +211,22 @@ export async function handleProviderApi(
       return await importFile(request, service, userId);
     }
 
+    if (url.pathname === '/api/providers/import-init' && method === 'POST') {
+      return await importInit(request, service, userId);
+    }
+
     const segments = url.pathname.split('/').filter(Boolean);
+    if (segments.length === 4 && segments[1] === 'providers' && segments[2] === 'import-chunk' && method === 'POST') {
+      return await importChunkRoute(request, service, userId, segments[3]!);
+    }
+
+    if (segments.length === 5 && segments[1] === 'providers' && segments[2] === 'import' && segments[4] === 'progress' && method === 'GET') {
+      return await getProgressRoute(request, service, userId, segments[3]!);
+    }
+
+    if (segments.length === 4 && segments[1] === 'providers' && segments[2] === 'import-complete' && method === 'POST') {
+      return await importCompleteRoute(request, service, userId, segments[3]!);
+    }
     if (segments.length < 3 || segments[1] !== 'providers') return null;
     const id = segments[2];
     if (!id || id.length > 128) throw new ProviderError('not_found', 404, 'Provider not found.');
