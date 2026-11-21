@@ -124,6 +124,14 @@ export class ProviderService {
     let credentialsKeyId: string | null = null;
     let metadata: Record<string, unknown> = {};
 
+    // A file-based provider has no remote playlist server: its content comes
+    // from an uploaded file, not a URL. Store an empty string so the NOT NULL
+    // `providers.server_url` column is satisfied without inventing a fake
+    // network URL (about:blank, file:// or a placeholder domain). `playlistUrl`
+    // stays `null` for `m3u_file` (see `toView`) and every fetch path guards on
+    // `!provider.serverUrl`, so this value is never used as a network target.
+    if (type === 'm3u_file') serverUrl = '';
+
     if (type === 'm3u_url') serverUrl = safeUrl(input.url, 'playlist URL');
     if (type === 'xtream') {
       serverUrl = safeUrl(input.serverUrl, 'server URL');

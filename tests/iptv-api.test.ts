@@ -108,6 +108,7 @@ describe('provider API', () => {
     expect(body).not.toContain('credentials_encrypted');
 
     const stored = [...repository.providers.values()][0];
+    expect(stored?.serverUrl).toBe('https://xtream.example.com:8080/');
     expect(stored?.credentialsEncrypted).not.toContain('never-expose-this-password');
     expect(stored?.credentialsKeyId).toBe('aes-gcm-v1');
     expect(stored?.metadata).toMatchObject({ xtreamUsername: 'viewer' });
@@ -122,7 +123,11 @@ describe('provider API', () => {
     form.append('file', new Blob(['#EXTM3U\n#EXTINF:-1 tvg-id="bbc",BBC\nhttps://stream.example.com/bbc\n']), 'list.m3u8');
     const imported = await harness.call('POST', '/api/providers/import', undefined, { rawBody: form });
     expect(imported.status).toBe(200);
-    expect((await imported.json()).imported).toBe(true);
+    const importedBody = await imported.json();
+    expect(importedBody.imported).toBe(true);
+    expect(importedBody.provider.serverUrl).toBe('');
+    expect(importedBody.provider.playlistUrl).toBeNull();
+    expect(importedBody.provider.type).toBe('m3u_file');
     expect([...repository.catalog.values()][0]?.[0]?.name).toBe('BBC');
 
     const unsafe = await harness.call('POST', '/api/providers', {
@@ -132,5 +137,70 @@ describe('provider API', () => {
     });
     expect(unsafe.status).toBe(400);
     expect((await unsafe.json()).error).toBe('unsafe_url');
+  });
+
+  it('creates an M3U file provider with an empty (no) server URL', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'file@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Cooking',
+      type: 'm3u_file',
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.provider.serverUrl).toBe('');
+    expect(body.provider.playlistUrl).toBeNull();
+    expect(body.provider.type).toBe('m3u_file');
+    expect(body.provider.xtreamUsername).toBeNull();
+
+    const stored = [...repository.providers.values()][0];
+    expect(stored?.serverUrl).toBe('');
+    expect(stored?.type).toBe('m3u_file');
+  });
+
+  it('creates an M3U URL provider storing the playlist URL as serverUrl', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'url@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Main playlist',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.provider.serverUrl).toBe('https://provider.example.com/playlist.m3u8');
+    expect(body.provider.playlistUrl).toBe('https://provider.example.com/playlist.m3u8');
+    expect(body.provider.type).toBe('m3u_url');
+
+    const stored = [...repository.providers.values()][0];
+    expect(stored?.serverUrl).toBe('https://provider.example.com/playlist.m3u8');
+  });
+
+  it('imports a cooking.m3u file and stores an empty server URL', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'cooking@example.com');
+
+    const cookingM3U = `#EXTM3U
+#EXTINF:-1 tvg-id="cnn" tvg-name="CNN" group-title="Cooking",CNN Cooking
+https://stream.test/cnn.m3u8
+#EXTINF:-1 tvg-id="bbc" tvg-name="BBC Food" group-title="Cooking",BBC Food
+https://stream.test/bbc.m3u8
+`;
+    const form = new FormData();
+    form.append('name', 'cooking');
+    form.append('file', new Blob([cookingM3U]), 'cooking.m3u');
+    const imported = await harness.call('POST', '/api/providers/import', undefined, {
+      rawBody: form,
+    });
+    expect(imported.status).toBe(200);
+    const body = await imported.json();
+    expect(body.imported).toBe(true);
+    expect(body.provider.serverUrl).toBe('');
+    expect(body.provider.playlistUrl).toBeNull();
+    expect(body.provider.type).toBe('m3u_file');
+    expect(body.provider.xtreamUsername).toBeNull();
+    expect([...repository.catalog.values()][0]?.[0]?.name).toBe('CNN Cooking');
   });
 });
