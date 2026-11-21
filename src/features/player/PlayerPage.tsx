@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, MonitorPlay, RefreshCw, ShieldCheck } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  Maximize,
+  Minimize,
+  MonitorPlay,
+  Pause,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { getChannelStream, getMovieStream, getEpisodeStream } from '../../lib/contentApi';
 
 type PlayerKind = 'channel' | 'movie' | 'episode';
@@ -22,6 +34,23 @@ const MAX_RETRIES = 3;
 /** Base delay (ms) for exponential backoff between automatic retries. */
 const RETRY_BASE_DELAY_MS = 1_000;
 
+/** Delay (ms) before auto-hiding controls after the last interaction while playing. */
+const CONTROLS_HIDE_DELAY_MS = 3_000;
+
+/** Seconds to seek backward/forward with arrow keys. */
+const SEEK_OFFSET_SECONDS = 10;
+
+/** Format seconds as M:SS or H:MM:SS. */
+function formatTime(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '0:00';
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const time = `${minutes}:${secs.toString().padStart(2, '0')}`;
+  return hours > 0 ? `${hours}:${time}` : time;
+}
+
 export function PlayerPage() {
   const { id = '' } = useParams();
 
@@ -34,14 +63,33 @@ export function PlayerPage() {
   const contentId =
     channelMatch?.params.id ?? movieMatch?.params.id ?? episodeMatch?.params.id ?? id;
 
+  const isLive = kind === 'channel';
+
+  // --- Stream resolution state ---
   const [stream, setStream] = useState<StreamResolution | null>(null);
   const [playerState, setPlayerState] = useState<PlayerState>('loading');
   const [apiError, setApiError] = useState<string | null>(null);
   const [playError, setPlayError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+
+  // --- Controls state ---
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPip, setIsPip] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPaused, setIsPaused] = useState(true);
+  const [isSeekable, setIsSeekable] = useState(false);
+  const [fullscreenSupported, setFullscreenSupported] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
+
+  // --- Refs ---
   const videoRef = useRef<HTMLVideoElement>(null);
   const startupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** Cancel all pending timers to avoid state updates after unmount or state transition. */
   const clearTimers = useCallback(() => {
@@ -53,8 +101,219 @@ export function PlayerPage() {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
   }, []);
 
+  // --- Controls timer helpers ---
+  const stopControlsTimer = useCallback(() => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+  }, []);
+
+  const startControlsTimer = useCallback(() => {
+    stopControlsTimer();
+    controlsTimerRef.current = setTimeout(() => {
+      setControlsVisible(false);
+    }, CONTROLS_HIDE_DELAY_MS);
+  }, [stopControlsTimer]);
+
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    stopControlsTimer();
+    if (playerState === 'playing') {
+      startControlsTimer();
+    }
+  }, [playerState, startControlsTimer, stopControlsTimer]);
+
+  // --- Video event handlers ---
+  const handlePlay = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      await video.play();
+      setPlayError(null);
+    } catch {
+      // Autoplay or retry was blocked by the browser. Treat as a manual-start
+      // prompt rather than a broken stream: show the play button in controls.
+      setPlayError(null);
+      setIsPaused(true);
+    }
+  }, []);
+
+  const handleVideoError = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const err = video.error;
+    if (!err) {
+      setPlayError('Playback failed.');
+      setPlayerState('failed');
+      return;
+    }
+    const messages: Record<number, string> = {
+      1: 'Media playback was aborted.',
+      2: 'Network error loading the stream.',
+      3: 'The stream format is not supported by this browser.',
+      4: 'The stream could not be decrypted or is not accessible.',
+    };
+    setPlayError(messages[err.code] ?? 'Playback failed.');
+    setPlayerState('failed');
+  }, []);
+
+  const handleVideoWaiting = useCallback(() => {
+    if (playerState === 'connecting' || playerState === 'playing') {
+      setPlayerState('buffering');
+    }
+  }, [playerState]);
+
+  const handleVideoPlaying = useCallback(() => {
+    setPlayerState('playing');
+    setPlayError(null);
+    setControlsVisible(true);
+    startControlsTimer();
+  }, [startControlsTimer]);
+
+  const handleVideoLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setDuration(video.duration);
+    setCurrentTime(video.currentTime);
+    setIsSeekable(video.seekable && video.seekable.length > 0);
+    setIsPaused(video.paused);
+  }, []);
+
+  const handleVideoTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setCurrentTime(video.currentTime);
+    setDuration(video.duration);
+    setIsSeekable(video.seekable && video.seekable.length > 0);
+  }, []);
+
+  const handleVideoPlay = useCallback(() => {
+    setIsPaused(false);
+    setPlayError(null);
+    showControls();
+  }, [showControls]);
+
+  const handleVideoPause = useCallback(() => {
+    setIsPaused(true);
+    setControlsVisible(true);
+    stopControlsTimer();
+  }, [stopControlsTimer]);
+
+  // --- Control handlers ---
+  const handleTogglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video
+        .play()
+        .catch(() => setPlayError('Could not start playback. Try again.'));
+    } else {
+      video.pause();
+    }
+  }, []);
+
+  const handleToggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const newMuted = !isMuted;
+    setIsMuted(newMuted);
+    video.muted = newMuted;
+    if (!newMuted) {
+      video.volume = volume;
+    }
+    showControls();
+  }, [isMuted, volume, showControls]);
+
+  const handleVolumeChange = useCallback((value: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    setIsMuted(false);
+    setVolume(value);
+    video.muted = false;
+    video.volume = value;
+    showControls();
+  }, [showControls]);
+
+  const handleSeek = useCallback((value: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (duration > 0) {
+      video.currentTime = (value / 100) * duration;
+    }
+    setCurrentTime((value / 100) * duration);
+    showControls();
+  }, [duration, showControls]);
+
+  const handleToggleFullscreen = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!isFullscreen) {
+      void video.requestFullscreen?.();
+    } else {
+      void document.exitFullscreen?.();
+    }
+  }, [isFullscreen]);
+
+  const handleTogglePip = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (!isPip) {
+        await video.requestPictureInPicture();
+      } else {
+        await document.exitPictureInPicture();
+      }
+    } catch {
+      // PiP unavailable or failed — silently ignore.
+    }
+  }, [isPip]);
+
+  const handleAttemptRetry = useCallback(() => {
+    if (retryCount >= MAX_RETRIES) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    setRetryCount((prev) => prev + 1);
+    setPlayError(null);
+    setPlayerState('connecting');
+
+    video.load();
+  }, [retryCount]);
+
+  const handleManualRetry = useCallback(() => {
+    setRetryCount(0);
+    setPlayError(null);
+    setPlayerState('connecting');
+    const video = videoRef.current;
+    if (video) {
+      video.load();
+    }
+    void handlePlay();
+  }, [handlePlay]);
+
+  // --- Interaction handlers (controls visibility) ---
+  const handlePointerMove = useCallback(() => {
+    showControls();
+  }, [showControls]);
+
+  const handlePointerDown = useCallback(() => {
+    showControls();
+  }, [showControls]);
+
+  const handleTouchStart = useCallback(() => {
+    showControls();
+  }, [showControls]);
+
+  // --- Effects (all callbacks defined above) ---
+
+  // Clear timers on unmount.
   useEffect(() => {
     return clearTimers;
   }, [clearTimers]);
@@ -104,8 +363,7 @@ export function PlayerPage() {
   }, [stream, playerState]);
 
   // Transition from loading to failed when the stream is resolved but not playable
-  // (e.g. Xtream providers where web playback is unsupported). This ensures the
-  // "Web playback not supported" message is shown instead of being stuck in loading.
+  // (e.g. Xtream providers where web playback is unsupported).
   useEffect(() => {
     if (stream && !stream.playable && playerState === 'loading') {
       setPlayerState('failed');
@@ -113,9 +371,6 @@ export function PlayerPage() {
   }, [stream, playerState]);
 
   // --- Startup timeout -------------------------------------------------------
-  // Fires if playback does not reach the 'playing' state within the timeout
-  // while in the 'connecting' state. Distinguishable from buffering because
-  // buffering only applies after playback has started.
   useEffect(() => {
     if (playerState !== 'connecting') {
       if (startupTimeoutRef.current) {
@@ -139,8 +394,6 @@ export function PlayerPage() {
   }, [playerState]);
 
   // --- Automatic retry with exponential backoff ------------------------------
-  // Retries automatically up to MAX_RETRIES times. After that, only a manual
-  // Retry action remains available. Backoff: 1s, 2s, 4s.
   useEffect(() => {
     if (playerState !== 'failed' || retryCount >= MAX_RETRIES) {
       if (retryTimeoutRef.current) {
@@ -153,7 +406,7 @@ export function PlayerPage() {
     const delay = RETRY_BASE_DELAY_MS * 2 ** retryCount;
     retryTimeoutRef.current = setTimeout(() => {
       if (playerState !== 'failed') return;
-      attemptRetry();
+      handleAttemptRetry();
     }, delay);
 
     return () => {
@@ -165,84 +418,91 @@ export function PlayerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerState, retryCount]);
 
-  // --- Video event handlers --------------------------------------------------
-  const handlePlay = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video) return;
-    try {
-      await video.play();
-      setPlayError(null);
-    } catch {
-      setPlayError('Autoplay was blocked by the browser. Click play to start.');
-    }
+  // --- API support detection -------------------------------------------------
+  useEffect(() => {
+    setFullscreenSupported(
+      typeof document.fullscreenEnabled === 'boolean' && document.fullscreenEnabled,
+    );
+    setPipSupported(
+      typeof document.pictureInPictureEnabled === 'boolean' && document.pictureInPictureEnabled,
+    );
   }, []);
 
-  // Attempt autoplay when entering the connecting state. If the browser blocks
-  // autoplay, the rejection is caught and a manual-start prompt is shown.
+  // Fullscreen change listener.
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement !== null);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  // Picture-in-Picture change listeners.
+  useEffect(() => {
+    const onEnterPip = () => setIsPip(true);
+    const onLeavePip = () => setIsPip(false);
+    document.addEventListener('enterpictureinpicture', onEnterPip);
+    document.addEventListener('leavepictureinpicture', onLeavePip);
+    return () => {
+      document.removeEventListener('enterpictureinpicture', onEnterPip);
+      document.removeEventListener('leavepictureinpicture', onLeavePip);
+    };
+  }, []);
+
+  // --- Keyboard shortcuts ----------------------------------------------------
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      switch (event.key) {
+        case ' ':
+        case 'Enter':
+          event.preventDefault();
+          handleTogglePlay();
+          break;
+        case 'ArrowLeft':
+          event.preventDefault();
+          if (duration > 0 && isSeekable) {
+            video.currentTime = Math.max(0, video.currentTime - SEEK_OFFSET_SECONDS);
+            setCurrentTime(video.currentTime);
+          }
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          if (duration > 0 && isSeekable) {
+            video.currentTime = Math.min(duration, video.currentTime + SEEK_OFFSET_SECONDS);
+            setCurrentTime(video.currentTime);
+          }
+          break;
+        case 'm':
+        case 'M':
+          handleToggleMute();
+          break;
+        case 'f':
+        case 'F':
+          handleToggleFullscreen();
+          break;
+        case 'Escape':
+          if (isFullscreen) {
+            void document.exitFullscreen?.();
+          }
+          break;
+        default:
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [duration, isFullscreen, isSeekable, handleTogglePlay, handleToggleMute, handleToggleFullscreen]);
+
+  // --- Autoplay on connecting ------------------------------------------------
   useEffect(() => {
     if (playerState === 'connecting') {
       void handlePlay();
     }
   }, [playerState, handlePlay]);
-
-  const handleVideoError = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const err = video.error;
-    if (!err) {
-      setPlayError('Playback failed.');
-      setPlayerState('failed');
-      return;
-    }
-    const messages: Record<number, string> = {
-      1: 'Media playback was aborted.',
-      2: 'Network error loading the stream.',
-      3: 'The stream format is not supported by this browser.',
-      4: 'The stream could not be decrypted or is not accessible.',
-    };
-    setPlayError(messages[err.code] ?? 'Playback failed.');
-    setPlayerState('failed');
-  }, []);
-
-  const handleVideoWaiting = useCallback(() => {
-    // The video has paused to buffer. Only mark buffering if we were
-    // connecting or playing; an initial waiting before play has started is
-    // still part of the startup phase and covered by the startup timeout.
-    if (playerState === 'connecting' || playerState === 'playing') {
-      setPlayerState('buffering');
-    }
-  }, [playerState]);
-
-  const handleVideoPlaying = useCallback(() => {
-    setPlayerState('playing');
-    setPlayError(null);
-  }, []);
-
-  const attemptRetry = useCallback(() => {
-    if (retryCount >= MAX_RETRIES) return;
-    const video = videoRef.current;
-    if (!video) return;
-
-    setRetryCount((prev) => prev + 1);
-    setPlayError(null);
-    setPlayerState('connecting');
-
-    // Reload the video element to attempt recovery from a transient failure.
-    video.load();
-  }, [retryCount]);
-
-  const handleManualRetry = useCallback(() => {
-    setRetryCount(0);
-    setPlayError(null);
-    setPlayerState('connecting');
-    const video = videoRef.current;
-    if (video) {
-      video.load();
-    }
-    // Re-attempt playback in case playerState was already 'connecting'
-    // (the effect above only fires on state transitions).
-    void handlePlay();
-  }, [handlePlay]);
 
   // --- Render ----------------------------------------------------------------
   if (!kind) {
@@ -250,7 +510,9 @@ export function PlayerPage() {
       <div className="inner-page phase-page">
         <div className="empty-state">
           <h1>Invalid player route</h1>
-          <Link to="/" className="button button--ghost">Return home</Link>
+          <Link to="/" className="button button--ghost">
+            Return home
+          </Link>
         </div>
       </div>
     );
@@ -271,7 +533,9 @@ export function PlayerPage() {
           <AlertCircle size={32} />
           <h1>Stream unavailable</h1>
           <p>{apiError}</p>
-          <Link to="/" className="button button--ghost">Return home</Link>
+          <Link to="/" className="button button--ghost">
+            Return home
+          </Link>
         </div>
       </div>
     );
@@ -283,7 +547,9 @@ export function PlayerPage() {
       <div className="inner-page player-page">
         <div className="empty-state">
           <h1>No stream data</h1>
-          <Link to="/" className="button button--ghost">Return home</Link>
+          <Link to="/" className="button button--ghost">
+            Return home
+          </Link>
         </div>
       </div>
     );
@@ -303,7 +569,9 @@ export function PlayerPage() {
           <p className="player-details__privacy">
             <ShieldCheck size={16} /> No provider credentials are exposed to the browser.
           </p>
-          <Link to="/" className="button button--ghost">Return home</Link>
+          <Link to="/" className="button button--ghost">
+            Return home
+          </Link>
         </div>
       </div>
     );
@@ -319,40 +587,166 @@ export function PlayerPage() {
   const canPlay = isHls ? probe('application/vnd.apple.mpegurl') : probe('video/mp4');
 
   const autoRetryAvailable = retryCount < MAX_RETRIES;
+  const kindLabel = kind === 'channel' ? 'Live TV' : kind === 'movie' ? 'Movie' : 'Episode';
 
   return (
-    <div className="player-page">
+    <div
+      className="player-page"
+      onPointerMove={handlePointerMove}
+      onPointerDown={handlePointerDown}
+      onTouchStart={handleTouchStart}
+      tabIndex={-1}
+    >
       <div className="player-frame">
         <Link to="/" className="button button--quiet" aria-label="Exit player">
           <ArrowLeft size={18} /> Exit player
         </Link>
-        <span className="badge badge--neutral">
-          <MonitorPlay size={14} /> Direct provider stream
-        </span>
-        <div className="player-frame__center">
-          {canPlay ? (
-            <>
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                onError={handleVideoError}
-                onWaiting={handleVideoWaiting}
-                onPlaying={handleVideoPlaying}
-                className="player-video" data-testid="player-video"
-                onPlay={() => setPlayError(null)}
-              >
-                <source src={streamUrl} />
-              </video>
-              {playerState === 'buffering' && (
-                <div className="player-buffering">
-                  <AlertCircle size={24} />
-                  <p>Buffering…</p>
+
+        {controlsVisible && (
+          <div className="player-controls-top">
+            <span className="player-eyebrow">{kindLabel}</span>
+            {isLive && (
+              <span className="badge badge--live">
+                <span className="badge__pulse" aria-hidden="true" />
+                LIVE
+              </span>
+            )}
+          </div>
+        )}
+
+        {canPlay ? (
+          <div className="player-video-container">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted={isMuted}
+              onError={handleVideoError}
+              onWaiting={handleVideoWaiting}
+              onPlaying={handleVideoPlaying}
+              onLoadedMetadata={handleVideoLoadedMetadata}
+              onTimeUpdate={handleVideoTimeUpdate}
+              onPlay={handleVideoPlay}
+              onPause={handleVideoPause}
+              onClick={handleTogglePlay}
+              className="player-video"
+              data-testid="player-video"
+            >
+              <source src={streamUrl} />
+            </video>
+
+            {playerState === 'buffering' && (
+              <div className="player-buffering">
+                <AlertCircle size={24} />
+                <p>Buffering…</p>
+              </div>
+            )}
+
+            {!playError && controlsVisible && (
+              <div className="player-controls-bottom">
+                <div className="player-controls-row">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={handleTogglePlay}
+                    aria-label={isPaused ? 'Play' : 'Pause'}
+                    data-testid="player-btn-play"
+                  >
+                    {isPaused ? <Play size={20} /> : <Pause size={20} />}
+                  </button>
+
+                  {isSeekable && duration > 0 && (
+                    <div className="player-progress">
+                      <span className="player-time">{formatTime(currentTime)}</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={duration > 0 ? (currentTime / duration) * 100 : 0}
+                        onChange={(event) => handleSeek(Number(event.target.value))}
+                        className="player-progress-input"
+                        data-testid="player-progress"
+                        disabled={!isSeekable}
+                      />
+                      <span className="player-time">{formatTime(duration)}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={handleToggleMute}
+                    aria-label={isMuted ? 'Unmute' : 'Mute'}
+                    data-testid="player-btn-mute"
+                  >
+                    {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                  </button>
+
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={isMuted ? 0 : volume}
+                    onChange={(event) => handleVolumeChange(Number(event.target.value))}
+                    className="player-volume-input"
+                    aria-label="Volume"
+                    data-testid="player-volume"
+                  />
+
+                  {pipSupported && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={handleTogglePip}
+                      aria-label="Picture-in-Picture"
+                      data-testid="player-btn-pip"
+                    >
+                      <MonitorPlay size={20} />
+                    </button>
+                  )}
+
+                  {fullscreenSupported && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={handleToggleFullscreen}
+                      aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                      data-testid="player-btn-fullscreen"
+                    >
+                      {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+                    </button>
+                  )}
                 </div>
-              )}
-            </>
-          ) : null}
-          {!canPlay && !playError ? (
+              </div>
+            )}
+
+            {playError && (
+              <div className="player-error">
+                <p>{playError}</p>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={handleManualRetry}
+                >
+                  <RefreshCw size={18} />
+                  {playError.includes('blocked') || playError.includes('Could not start')
+                    ? 'Click to Play'
+                    : 'Retry Playback'}
+                </button>
+                {!autoRetryAvailable && (
+                  <p className="player-error__terminal">
+                    Automatic retries exhausted. Try again manually when ready.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {!canPlay && !playError ? (
+          <div className="player-frame__center">
             <div className="player-frame__unsupported">
               <AlertCircle size={32} />
               <h2>Stream format not supported</h2>
@@ -363,26 +757,8 @@ export function PlayerPage() {
               </p>
               <p>Use the Veyro native app on Android/Android TV for direct provider playback.</p>
             </div>
-          ) : null}
-          {playError && (
-            <div className="player-error">
-              <p>{playError}</p>
-              <button
-                type="button"
-                className="button button--primary"
-                onClick={handleManualRetry}
-              >
-                <RefreshCw size={18} />
-                {playError.includes('blocked') ? 'Click to Play' : 'Retry Playback'}
-              </button>
-              {!autoRetryAvailable && (
-                <p className="player-error__terminal">
-                  Automatic retries exhausted. Try again manually when ready.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
