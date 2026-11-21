@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom';
-import { Database, MonitorPlay, Palette, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { MonitorPlay, Palette, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { usePreferences } from '../../state/PreferencesContext';
 import { useAuth } from '../../state/AuthContext';
 import type { Preferences } from '../../types/domain';
+import { ProvidersSection } from './ProvidersSection';
 
 function Toggle({
   label,
@@ -68,7 +69,7 @@ export function SettingsPage() {
       <PageHeader
         eyebrow="Preferences"
         title="Settings"
-        description="Interface preferences are stored locally on this device. Account and provider settings arrive with their implementation phases."
+        description="Manage your IPTV providers and tailor the interface to this device."
       />
 
       <section className="settings-section" aria-labelledby="settings-interface">
@@ -164,23 +165,13 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <ProvidersSection />
+
       <section className="settings-section" aria-labelledby="settings-sources">
         <h2 id="settings-sources">
-          <Database size={19} /> Sources & account
+          <ShieldCheck size={19} /> Account & privacy
         </h2>
         <div className="settings-card">
-          <p className="settings-card__note">
-            Accounts and sessions are live. Provider management arrives in Phase 3 and QR pairing in Phase 6.
-          </p>
-          <div className="setting-row setting-row--link">
-            <span>
-              <strong>IPTV sources</strong>
-              <small>M3U URL, M3U upload or Xtream-style credentials.</small>
-            </span>
-            <Link to="/tv/pair" className="button button--ghost">
-              Add source
-            </Link>
-          </div>
           <div className="setting-row setting-row--link">
             <span>
               <strong>Profile & devices</strong>

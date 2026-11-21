@@ -46,7 +46,7 @@ async function initializeCsrfToken(): Promise<string> {
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
-  if (!headers.has('content-type') && method !== 'GET') {
+  if (!headers.has('content-type') && method !== 'GET' && !(init.body instanceof FormData)) {
     headers.set('content-type', 'application/json');
   }
   let csrfToken = readCookie(CSRF_COOKIE);
