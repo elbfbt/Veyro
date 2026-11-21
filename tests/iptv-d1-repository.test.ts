@@ -157,4 +157,62 @@ describe('D1 provider repository against real migrations', () => {
     expect(await repository.remove('user-1', provider.id)).toBe(true);
     expect((db.prepare('SELECT COUNT(*) AS count FROM channels').get() as { count: number }).count).toBe(0);
   });
+  it('stores Xtream categories and links episodes to their series', async () => {
+    const db = makeDatabase();
+    const repository = new D1ProviderRepository(databaseAdapter(db));
+    await repository.create(provider);
+    const keys = await repository.loadCatalogKeys('user-1', provider.id);
+    const entries: M3uEntry[] = [
+      {
+        externalId: 'xtream:series:30',
+        name: 'A Show',
+        streamUrl: 'xtream://series/30',
+        tvgId: null,
+        tvgName: null,
+        tvgLogo: null,
+        groupTitle: null,
+        country: null,
+        language: null,
+        channelNumber: null,
+        kind: 'series',
+        categoryExternalId: 'xtream:series:3',
+        categoryName: 'Shows',
+        categoryType: 'series',
+        posterUrl: 'https://img.test/show.png',
+      },
+      {
+        externalId: 'xtream:episode:40',
+        name: 'Pilot',
+        streamUrl: 'xtream://episode/40',
+        tvgId: null,
+        tvgName: null,
+        tvgLogo: null,
+        groupTitle: null,
+        country: null,
+        language: null,
+        channelNumber: null,
+        kind: 'episode',
+        seriesExternalId: 'xtream:series:30',
+        seasonNumber: 1,
+        episodeNumber: 1,
+      },
+    ];
+    const saved = await repository.saveCatalog(
+      'user-1',
+      provider.id,
+      entries,
+      keys,
+      { newId: () => `catalog-${crypto.randomUUID()}` },
+      1_700_000_100,
+      [{ externalId: 'xtream:series:3', name: 'Shows', type: 'series' }],
+    );
+    expect(saved).toEqual({ added: 2, updated: 0, categoriesAdded: 1 });
+
+    const category = db.prepare("SELECT type FROM categories WHERE external_id = 'xtream:series:3'").get() as { type: string };
+    expect(category.type).toBe('series');
+    const episode = db.prepare('SELECT series_id, season_number FROM episodes').get() as { series_id: string | null; season_number: number };
+    expect(episode.series_id).toBeTruthy();
+    expect(episode.season_number).toBe(1);
+  });
+
 });

@@ -67,6 +67,21 @@ describe('provider credential encryption', () => {
   it('refuses to encrypt without a configured worker secret', async () => {
     await expect(new ProviderCredentialCipher(undefined).encrypt('secret')).rejects.toThrow();
   });
+
+
+  it('decrypts server-side and rejects wrong keys without leaking plaintext', async () => {
+    const cipher = new ProviderCredentialCipher(SECRET);
+    const plaintext = JSON.stringify({ username: 'viewer', password: 'round-trip-secret' });
+    const encrypted = await cipher.encrypt(plaintext);
+    expect(await cipher.decrypt(encrypted.ciphertext, encrypted.keyId)).toBe(plaintext);
+    await expect(cipher.decrypt(encrypted.ciphertext, 'aes-gcm-v2')).rejects.toThrow(
+      'Provider credentials could not be secured.',
+    );
+    const wrongSecret = new ProviderCredentialCipher('b1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+    await expect(wrongSecret.decrypt(encrypted.ciphertext, encrypted.keyId)).rejects.toThrow(
+      'Provider credentials could not be secured.',
+    );
+  });
 });
 
 describe('bounded playlist fetching', () => {
