@@ -95,7 +95,7 @@ describe('provider import against production legacy D1 schema', () => {
     const response = await harnessA.call('POST', '/api/providers/import', undefined, {
       rawBody: uploadForm(),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as { imported: boolean; provider: { id: string; isDefault: boolean } };
     expect(body.imported).toBe(true);
     expect(body.provider.isDefault).toBe(true);
@@ -168,7 +168,7 @@ describe('provider import against production legacy D1 schema', () => {
     await register(harnessB, 'legacy-other@example.com');
 
     const imported = await harnessA.call('POST', '/api/providers/import', undefined, { rawBody: uploadForm() });
-    expect(imported.status).toBe(201);
+    expect(imported.status).toBe(200);
     const providerId = ((await imported.json()) as { provider: { id: string } }).provider.id;
     const categoryId = rows(database, 'SELECT id FROM categories WHERE name = ?', 'Movies')[0]?.id as string;
 

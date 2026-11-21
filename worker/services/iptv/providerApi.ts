@@ -95,7 +95,7 @@ async function importFile(request: Request, service: ProviderApiService, userId:
     throw new ProviderError('validation_error', 400, 'Choose a .m3u or .m3u8 playlist file.');
   }
   const provider = await service.importFile(userId, name, await file.text());
-  return json({ provider, imported: true }, 201);
+  return json({ provider, imported: true });
 }
 
 /** Returns null for non-provider routes so api.ts can continue routing. */
