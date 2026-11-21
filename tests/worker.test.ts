@@ -27,7 +27,7 @@ describe('worker API contract', () => {
   it('truthfully reports future endpoints as unimplemented', async () => {
     const { call } = harness();
     await call('GET', '/api/auth/csrf');
-    const response = await call('POST', '/api/channels', { query: 'demo' });
+    const response = await call('POST', '/api/epg', { query: 'demo' });
     expect(response.status).toBe(501);
     expect(await response.json()).toMatchObject({ error: 'not_implemented' });
   });

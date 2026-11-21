@@ -137,6 +137,28 @@ first 25 series per refresh within a 30-second overall request budget.
 Uploaded files are imported once; upload a new file to replace their catalogue.
 Veyro does not proxy, relay or play streams in Phase 3.
 
+## Content browsing API
+
+Phase 4 adds authenticated, ownership-scoped catalogue browsing. All list endpoints
+use bounded page/limit pagination (default 24, maximum 100; categories default 200,
+maximum 500; episodes default 50, maximum 200). Search is server-side and supports
+`provider`, `category`, `q`, `sort`, `page` and `limit` query parameters.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/channels` | Owned channels with provider/category/search filters |
+| GET | `/api/channels/:id` | One owned channel |
+| GET | `/api/movies` | Owned movies with provider/category/search filters |
+| GET | `/api/movies/:id` | One owned movie |
+| GET | `/api/series` | Owned series with provider/category/search filters |
+| GET | `/api/series/:id` | Owned series metadata |
+| GET | `/api/series/:id/episodes` | Owned episodes in season/episode order |
+| GET | `/api/episodes/:id` | One owned episode |
+| GET | `/api/categories` | Owned categories filtered by `type` and `provider` |
+
+Responses intentionally omit `stream_url`; Phase 5 will resolve playback separately.
+Artwork URLs are validated and unsafe values become `null`.
+
 ## Authentication API
 
 | Method | Endpoint | Description |
