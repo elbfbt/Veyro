@@ -44,7 +44,7 @@ npm run dev:worker   # optional: API on http://localhost:8787, proxied from Vite
 # or: npm run dev:all
 ```
 
-Authentication requires the Worker. Run `npm run dev:all` (or start both dev commands) so Vite proxies `/api` to Wrangler. Apply the migrations locally once with `npx wrangler d1 migrations apply veyro-db --local`. Unimplemented API routes still return a truthful `501`.
+Authentication requires the Worker. Run `npm run dev:all` (or start both dev commands) so Vite proxies `/api` to Wrangler. Apply the migrations locally once with `npm run migrate:local`. Unimplemented API routes still return a truthful `501`.
 
 ### Verify the build
 
@@ -74,10 +74,28 @@ wrangler secret put VEYRO_PROVIDER_SECRET
 Deploy:
 
 ```bash
-npm run build
-npx wrangler d1 migrations apply veyro-db --remote
 npm run deploy
+# equivalent to: build → migrate:remote → wrangler deploy
 ```
+
+If deploying through a Cloudflare Git integration instead of the npm script, add
+`npm run migrate:remote` as a build step. Deploying Worker code without applying
+D1 migrations leaves the auth tables missing in production.
+
+### Troubleshooting: registration returns 503 `schema_not_migrated`
+
+This means the Worker is running but the remote database does not have the
+current schema. Apply the migrations with Wrangler (requires Cloudflare credentials
+in the deployment environment):
+
+```bash
+npm run migrate:remote
+npx wrangler d1 migrations list veyro-db --remote
+```
+
+The API deliberately does not expose the underlying SQL error, table name or
+request credentials. Do not disable CSRF, hashing or rate limiting to work
+around a schema error.
 
 ## Routes
 

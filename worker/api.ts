@@ -42,6 +42,24 @@ export function json(body: unknown, status = 200, extraHeaders?: HeadersInit): R
   return new Response(JSON.stringify(body), { status, headers });
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message);
+  return '';
+}
+
+/**
+ * Missing D1 migrations surface as SQLite errors from the first query that
+ * touches the absent table. Detect them without leaking SQL text or input.
+ */
+function isSchemaMigrationError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return (
+    (message.includes('no such table') || message.includes('no such column')) &&
+    /(users|sessions|devices|auth_attempts|password_resets)/.test(message)
+  );
+}
+
 function errorResponse(error: unknown): Response {
   if (error instanceof AuthError) {
     const status =
@@ -53,6 +71,15 @@ function errorResponse(error: unknown): Response {
             ? 409
             : 400;
     return json({ error: error.code, message: error.message }, status);
+  }
+  if (isSchemaMigrationError(error)) {
+    return json(
+      {
+        error: 'schema_not_migrated',
+        message: 'The database schema is not up to date. Apply the D1 migrations and retry.',
+      },
+      503,
+    );
   }
   // Never echo internal errors, SQL or user input back to the client.
   return json({ error: 'internal_error', message: 'The request could not be completed.' }, 500);
