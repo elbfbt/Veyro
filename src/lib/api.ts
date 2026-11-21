@@ -1,4 +1,5 @@
 const CSRF_COOKIE = 'veyro_csrf';
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export interface ApiErrorBody {
   error: string;
@@ -24,6 +25,23 @@ export function readCookie(name: string): string | null {
   return null;
 }
 
+/** Raw GET: must not call apiRequest(), otherwise CSRF initialization would recurse. */
+async function initializeCsrfToken(): Promise<string> {
+  try {
+    const response = await fetch('/api/auth/csrf', { credentials: 'include' });
+    await response.text();
+    if (!response.ok) throw new Error(`CSRF initialization returned ${response.status}`);
+  } catch {
+    throw new ApiError(0, 'csrf_initialization_failed', 'Could not initialize CSRF protection. Please retry.');
+  }
+
+  const token = readCookie(CSRF_COOKIE);
+  if (!token) {
+    throw new ApiError(0, 'csrf_initialization_failed', 'CSRF cookie was not established. Please retry.');
+  }
+  return token;
+}
+
 /** Same-origin API client. Session cookies are httpOnly and handled by the browser. */
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
@@ -31,8 +49,9 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   if (!headers.has('content-type') && method !== 'GET') {
     headers.set('content-type', 'application/json');
   }
-  const csrfToken = readCookie(CSRF_COOKIE);
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && csrfToken) {
+  let csrfToken = readCookie(CSRF_COOKIE);
+  if (MUTATING_METHODS.has(method)) {
+    if (!csrfToken) csrfToken = await initializeCsrfToken();
     headers.set('x-csrf-token', csrfToken);
   }
 
