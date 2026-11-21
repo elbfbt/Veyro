@@ -37,6 +37,17 @@ The following are designed to be platform-neutral and reusable by a future nativ
 
 Core parsing and preference logic stays in plain TypeScript modules without browser-only dependencies where practical.
 
+## Phase 2 authentication implementation
+
+- `worker/services/auth/` isolates the auth business logic behind small interfaces. `D1AuthRepository` and `D1RateLimiter` are the only D1-aware adapters; the service, password hasher and token helpers are plain TypeScript and fully unit tested.
+- Passwords use Web Crypto PBKDF2-SHA-256 (210,000 iterations, 16-byte random salt, 256-bit output). Stored format: `pbkdf2-sha256$iterations$salt$hash`. Unknown-account logins perform the same work as wrong-password logins.
+- Session tokens are 32-byte random values. Only their SHA-256 digests are stored in `sessions.token_hash`. The raw token exists only in an httpOnly, Secure (except local HTTP), SameSite=Lax cookie and is never logged or returned after creation.
+- State-changing API requests require both a readable `veyro_csrf` cookie and a matching `X-CSRF-Token` header, plus a same-origin `Origin` header when one is present. Login and registration are protected too.
+- Sessions expire after 30 days; `last_seen_at` is refreshed on authenticated reads. Users can list and revoke their own sessions, and all session queries are scoped by `user_id`.
+- Failed login/registration attempts are rate limited per client and email in D1 (10 attempts per 15 minutes). No Redis or external auth service.
+- Devices are upserted by `(user_id, name)` on login/register so friendly names such as "Living Room TV" are ready for native apps.
+- Password reset is an architecture placeholder: the request endpoint always returns the same generic response, creates no token, sends no email, and confirmation returns `501`.
+
 ## Security rules for all phases
 
 1. Hash passwords with a mature Workers-compatible primitive; never store plaintext.

@@ -2,7 +2,7 @@
 
 **Veyro is an IPTV client, not an IPTV provider.** Users bring their own M3U playlist or provider credentials. Veyro stores configuration and metadata, but **never relays continuous IPTV video traffic** — streams play directly from the user's provider to their device.
 
-Phase 1 delivers the production-minded foundation: React/Vite SPA, a single Cloudflare Worker with D1 binding, initial schema, a premium dark streaming UI, routing, responsive shell and clearly marked demo content.
+Phase 2 adds real accounts and sessions on top of the Phase 1 foundation: React/Vite SPA, a single Cloudflare Worker with D1 binding, a premium dark streaming UI, responsive shell and clearly marked demo content.
 
 ## Stack
 
@@ -21,11 +21,15 @@ src/
   data/           Clearly fictional demo catalogue
   features/       Route-level screens grouped by domain
   hooks/          D-pad navigation hook
-  lib/            Pure helpers (spatial navigation)
-  state/          Local preferences and library contexts
-  styles/         Tokens, base, layout, components, pages
+  lib/            Pure helpers (spatial navigation, API client)
+  state/          Auth, preferences and library contexts
+  styles/         Tokens, base, layout, components, pages, auth
   types/          Shared domain types
-worker/           Single Worker (API) and testable API module
+worker/
+  http/           Cookie and CSRF helpers
+  services/auth/  Replaceable auth service, D1 adapters, Web Crypto hashing
+  api.ts          Route table and request validation
+  index.ts        Worker entry point
 migrations/       D1 SQL migrations
 tests/            Unit tests
 public/media/     Locally generated, non-copyrighted placeholder artwork
@@ -40,7 +44,7 @@ npm run dev:worker   # optional: API on http://localhost:8787, proxied from Vite
 # or: npm run dev:all
 ```
 
-The app works without the Worker in Phase 1: `/api/health` is the only implemented endpoint and every other API route truthfully returns `501`.
+Authentication requires the Worker. Run `npm run dev:all` (or start both dev commands) so Vite proxies `/api` to Wrangler. Apply the migrations locally once with `npx wrangler d1 migrations apply veyro-db --local`. Unimplemented API routes still return a truthful `501`.
 
 ### Verify the build
 
@@ -61,7 +65,9 @@ Individual commands: `npm run typecheck`, `npm run lint`, `npm test`, `npm run b
 No credentials are stored in the repository. Copy `.env.example` to `.env` locally if desired, then set real runtime secrets with:
 
 ```bash
+# Reserved for future signing; Phase 2 sessions use hashed opaque tokens.
 wrangler secret put VEYRO_SESSION_SECRET
+# Will encrypt provider credentials in Phase 3.
 wrangler secret put VEYRO_PROVIDER_SECRET
 ```
 
@@ -77,22 +83,39 @@ npm run deploy
 
 `/`, `/live`, `/movies`, `/series`, `/search`, `/library`, `/favorites`, `/history`, `/watchlist`, `/settings`, `/profile`, `/player/:id`, `/connect`, `/tv/pair`, `/login`, `/register`.
 
-Routes for later phases show honest "planned" screens rather than fake forms or simulated playback.
+Login, registration and profile are now real screens. Other later-phase routes show honest "planned" screens rather than fake forms or simulated playback.
 
-## Phase 1 feature notes
+## Authentication API
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/auth/csrf` | Issues the double-submit CSRF cookie |
+| POST | `/api/auth/register` | Creates account, session and default device |
+| POST | `/api/auth/login` | Verifies password and creates a session |
+| GET | `/api/auth/me` | Returns the current user and session metadata |
+| POST | `/api/auth/logout` | Deletes the current session and clears cookies |
+| GET | `/api/auth/sessions` | Lists sessions owned by the current user |
+| DELETE | `/api/auth/sessions/:id` | Revokes a session owned by the current user |
+| GET | `/api/auth/devices` | Lists friendly device names for the current user |
+| POST | `/api/auth/forgot-password` | Generic response; email delivery is not configured |
+| POST | `/api/auth/password-reset/confirm` | Truthful `501` until email delivery exists |
+
+`GET /api/health` remains available for liveness checks. No stream proxy endpoint exists.
+
+## Phase 1 + 2 feature notes
 
 - **Sidebar**: expandable/collapsible, persisted, tooltip labels when collapsed, keyboard shortcut `Ctrl + \`, mobile drawer + bottom navigation.
 - **TV mode**: larger controls and D-pad spatial focus movement; enable under Settings → Interface. Focus is always visible and never hover-only.
 - **Search**: local demo search with `/` shortcut.
-- **Favorites/watchlist**: local device persistence; account sync arrives with authentication.
-- **Accessibility**: semantic controls, skip link, ARIA labels, visible focus, reduced-motion support and adequate contrast.
+- **Favorites/watchlist**: local device persistence; account sync is planned with provider data in Phase 7.
+- **Authentication**: PBKDF2-SHA-256 password hashes, opaque 30-day session tokens stored only as SHA-256 digests, httpOnly/Secure/SameSite cookies, CSRF double-submit protection, origin checks and D1 rate limiting.
+- **Accessible auth UI**: labelled inputs, visible errors, `aria-live` status, no password values in URLs or logs.
 - **Demo data**: fictional titles and locally generated artwork. No real streams, credentials or third-party media URLs are bundled.
 
 ## Deliberately out of scope (planned phases)
 
 | Phase | Work |
 | --- | --- |
-| 2 | Accounts, password hashing, secure sessions, CSRF |
 | 3 | Provider model, M3U parser, playlist import |
 | 4 | Full Live/Movies/Series catalogue views |
 | 5 | PlaybackManager, engine selection, fallback, reconnect, 24/7 reliability |
