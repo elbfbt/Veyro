@@ -32,6 +32,8 @@ export interface ProviderView {
   lastImport: Record<string, unknown> | null;
   lastError: string | null;
   xtreamUsername: string | null;
+  /** True while a chunked import is in progress for this provider. */
+  importing: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -139,6 +141,51 @@ export interface CatalogKeysView {
   categories: Map<string, string>;
 }
 
+export type ImportJobStatus = 'pending' | 'importing' | 'completed' | 'failed' | 'expired';
+
+export interface ImportJob {
+  id: string;
+  userId: string;
+  providerId: string;
+  filename: string;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  lastProcessedChunk: number;
+  lastChunkHash: string | null;
+  status: ImportJobStatus;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface ImportInitInput {
+  name: string;
+  totalEntries: number;
+  totalChunks: number;
+  chunkSize: number;
+  fileSize: number;
+}
+
+export interface ImportChunkInput {
+  chunkIndex: number;
+  entries: M3uEntry[];
+}
+
+export interface ImportProgress {
+  jobId: string;
+  status: ImportJobStatus;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  percentage: number;
+  error: string | null;
+  providerId: string;
+}
+
 export interface ProviderRepository {
   list(userId: string): Promise<StoredProvider[]>;
   find(userId: string, id: string): Promise<StoredProvider | null>;
@@ -157,4 +204,21 @@ export interface ProviderRepository {
     now: number,
     categories?: CatalogCategory[],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }>;
+  createImportJob(
+    userId: string,
+    providerId: string,
+    filename: string,
+    totalEntries: number,
+    totalChunks: number,
+    now: number,
+  ): Promise<string>;
+  getImportJob(userId: string, jobId: string, now: number): Promise<ImportJob | null>;
+  updateImportJob(
+    userId: string,
+    jobId: string,
+    patch: Partial<Pick<ImportJob, 'importedEntries' | 'completedChunks' | 'lastProcessedChunk' | 'lastChunkHash' | 'status' | 'error' | 'updatedAt'>>,
+    now: number,
+    expectedCompletedChunks?: number,
+    expectedLastProcessedChunk?: number,
+  ): Promise<boolean>;
 }

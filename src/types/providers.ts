@@ -26,6 +26,8 @@ export interface Provider {
   lastImport: ProviderImportStats | null;
   lastError: string | null;
   xtreamUsername: string | null;
+  /** True while a chunked import is in progress for this provider. */
+  importing: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -33,4 +35,29 @@ export interface Provider {
 export interface ConnectionTestResult {
   ok: boolean;
   status: 'reachable' | 'unreachable' | 'local' | 'unsupported';
+}
+
+export type ImportJobStatus = 'pending' | 'importing' | 'completed' | 'failed' | 'expired';
+
+export interface ImportJobProgress {
+  jobId: string;
+  status: ImportJobStatus;
+  totalEntries: number;
+  importedEntries: number;
+  totalChunks: number;
+  completedChunks: number;
+  percentage: number;
+  error: string | null;
+  providerId: string;
+}
+
+export interface ImportInitResult {
+  jobId: string;
+  providerId: string;
+}
+
+export interface ImportChunkResult {
+  chunkIndex: number;
+  status: 'completed' | 'skipped';
+  importedEntries: number;
 }
