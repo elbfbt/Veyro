@@ -13,11 +13,13 @@ import {
   serializeCookie,
 } from './http/cookies';
 import { isAllowedOrigin, isCsrfRequestValid, newCsrfToken } from './http/csrf';
+import { handleProviderApi, type ProviderApiService } from './services/iptv/providerApi';
 
 export interface ApiDependencies {
   auth: AuthService;
   databaseBound: boolean;
   now: () => number;
+  providers?: ProviderApiService;
 }
 
 const JSON_HEADERS: Record<string, string> = {
@@ -229,7 +231,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
 
       // Unknown, not-yet-implemented APIs return 501 without demanding a
       // session; known protected routes below do require authentication.
-      if (!path.startsWith('/api/auth/')) {
+      if (!path.startsWith('/api/auth/') && !path.startsWith('/api/providers')) {
         return json(
           {
             error: 'not_implemented',
@@ -242,6 +244,11 @@ export function createApiHandler(dependencies: ApiDependencies) {
       // Everything below requires a valid session.
       const context = await dependencies.auth.authenticateToken(readCookie(request, SESSION_COOKIE));
       if (!context) throw new AuthError('authentication_required', 'Sign in to continue.');
+
+      if (dependencies.providers) {
+        const providerResponse = await handleProviderApi(request, url, context.user.id, dependencies.providers);
+        if (providerResponse) return providerResponse;
+      }
 
       if (path === '/api/auth/me' && method === 'GET') {
         const headers = new Headers();

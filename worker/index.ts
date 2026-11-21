@@ -2,7 +2,8 @@
  * Veyro's single Cloudflare Worker.
  *
  * Responsibilities: static asset fallback, account/session operations (Phase 2),
- * provider metadata, EPG metadata, pairing and device state.
+ * provider metadata and playlist imports (Phase 3), EPG metadata, pairing and
+ * device state.
  *
  * This Worker intentionally contains NO video streaming endpoint. Continuous
  * IPTV traffic always flows directly from the user's provider to their device.
@@ -13,10 +14,17 @@ import { D1RateLimiter } from './services/auth/d1RateLimiter';
 import { WebCryptoPasswordHasher } from './services/auth/password';
 import { AuthService } from './services/auth/service';
 import { randomToken } from './services/auth/tokens';
+import {
+  D1ProviderRepository,
+  ProviderCredentialCipher,
+  ProviderService,
+  fetchPublicPlaylist,
+} from './services/iptv/index';
 
 export interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  VEYRO_PROVIDER_SECRET?: string;
 }
 
 export default {
@@ -31,10 +39,18 @@ export default {
         clock: { now: () => Math.floor(Date.now() / 1000) },
         ids: { newId: () => randomToken(18) },
       });
+      const providers = new ProviderService({
+        repository: new D1ProviderRepository(env.DB),
+        cipher: new ProviderCredentialCipher(env.VEYRO_PROVIDER_SECRET),
+        ids: { newId: () => crypto.randomUUID() },
+        clock: { now: () => Math.floor(Date.now() / 1000) },
+        fetchPlaylist: fetchPublicPlaylist,
+      });
       const handleApi = createApiHandler({
         auth,
         databaseBound: Boolean(env.DB),
         now: () => Math.floor(Date.now() / 1000),
+        providers,
       });
       return handleApi(request, url);
     }
