@@ -563,7 +563,11 @@ export function ProvidersSection() {
 
             {importState.phase === 'selecting' && (
               <>
-                <p>Selected: <strong>{importState.file?.name}</strong> ({Math.round(importState.file!.size / 1024)} KB)</p>
+                {importState.file && (
+                  <p>
+                    Selected: <strong>{importState.file.name}</strong> ({Math.round(importState.file.size / 1024)} KB)
+                  </p>
+                )}
                 <input
                   type="file"
                   accept=".m3u,.m3u8"
