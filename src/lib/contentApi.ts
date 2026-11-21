@@ -76,3 +76,21 @@ export function getEpisodes(id: string, query: CatalogQuery = {}) {
 export function getEpisode(id: string) {
   return apiRequest<{ episode: EpisodeItem }>(`/episodes/${encodeURIComponent(id)}`);
 }
+
+export function getChannelStream(id: string) {
+  return apiRequest<{ stream: { playable: boolean; streamUrl?: string; reason?: string } }>(
+    `/channels/${encodeURIComponent(id)}/stream`,
+  );
+}
+
+export function getMovieStream(id: string) {
+  return apiRequest<{ stream: { playable: boolean; streamUrl?: string; reason?: string } }>(
+    `/movies/${encodeURIComponent(id)}/stream`,
+  );
+}
+
+export function getEpisodeStream(id: string) {
+  return apiRequest<{ stream: { playable: boolean; streamUrl?: string; reason?: string } }>(
+    `/episodes/${encodeURIComponent(id)}/stream`,
+  );
+}

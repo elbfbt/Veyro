@@ -106,6 +106,25 @@ interface EpisodeRow {
   updated_at: number;
 }
 
+interface StreamChannelRow {
+  id: string;
+  stream_url: string;
+  provider_id: string;
+  provider_type: string;
+}
+interface StreamMovieRow {
+  id: string;
+  stream_url: string;
+  provider_id: string;
+  provider_type: string;
+}
+interface StreamEpisodeRow {
+  id: string;
+  stream_url: string;
+  provider_id: string;
+  provider_type: string;
+}
+
 /** Rows produced by the legacy production schema via playlist timestamps. */
 type LegacyCategoryRow = CategoryRow;
 type LegacyChannelRow = Omit<ChannelRow, 'channel_number' | 'country' | 'language'>;
@@ -411,6 +430,44 @@ const LEGACY_EPISODE_SELECT = `SELECT e.id, e.series_id, s.name AS series_title,
   JOIN series s ON s.id = e.series_id
   JOIN playlists pl ON pl.id = s.playlist_id
   JOIN providers p ON p.id = pl.provider_id`;
+
+/** Dedicated stream-resolution queries: content -> playlist -> provider -> user (legacy) or content -> provider -> user (rich). */
+const STREAM_CHANNEL_SQL = {
+  legacy: `SELECT t.id, t.stream_url, pl.provider_id, p.type AS provider_type
+    FROM channels t
+    JOIN playlists pl ON pl.id = t.playlist_id
+    JOIN providers p ON p.id = pl.provider_id
+    WHERE t.id = ? AND p.user_id = ?`,
+  rich: `SELECT t.id, t.stream_url, t.provider_id, p.type AS provider_type
+    FROM channels t
+    JOIN providers p ON p.id = t.provider_id AND p.user_id = t.user_id
+    WHERE t.id = ? AND t.user_id = ?`,
+};
+
+const STREAM_MOVIE_SQL = {
+  legacy: `SELECT t.id, t.stream_url, pl.provider_id, p.type AS provider_type
+    FROM movies t
+    JOIN playlists pl ON pl.id = t.playlist_id
+    JOIN providers p ON p.id = pl.provider_id
+    WHERE t.id = ? AND p.user_id = ?`,
+  rich: `SELECT t.id, t.stream_url, t.provider_id, p.type AS provider_type
+    FROM movies t
+    JOIN providers p ON p.id = t.provider_id AND p.user_id = t.user_id
+    WHERE t.id = ? AND t.user_id = ?`,
+};
+
+const STREAM_EPISODE_SQL = {
+  legacy: `SELECT e.id, e.stream_url, pl.provider_id, p.type AS provider_type
+    FROM episodes e
+    JOIN series s ON s.id = e.series_id
+    JOIN playlists pl ON pl.id = s.playlist_id
+    JOIN providers p ON p.id = pl.provider_id
+    WHERE e.id = ? AND p.user_id = ?`,
+  rich: `SELECT e.id, e.stream_url, e.provider_id, p.type AS provider_type
+    FROM episodes e
+    JOIN providers p ON p.id = e.provider_id AND p.user_id = e.user_id
+    WHERE e.id = ? AND e.user_id = ?`,
+};
 
 export class D1ContentRepository {
   constructor(private readonly db: ProviderDatabase) {}
@@ -864,5 +921,23 @@ export class D1ContentRepository {
       .bind(id, userId)
       .first<EpisodeRow>();
     return row ? mapEpisode(row) : null;
+  }
+
+  async findChannelStream(userId: string, id: string): Promise<StreamChannelRow | null> {
+    const sql = (await this.schemaMode()) === 'legacy' ? STREAM_CHANNEL_SQL.legacy : STREAM_CHANNEL_SQL.rich;
+    const row = await this.db.prepare(sql).bind(id, userId).first<StreamChannelRow>();
+    return row ?? null;
+  }
+
+  async findMovieStream(userId: string, id: string): Promise<StreamMovieRow | null> {
+    const sql = (await this.schemaMode()) === 'legacy' ? STREAM_MOVIE_SQL.legacy : STREAM_MOVIE_SQL.rich;
+    const row = await this.db.prepare(sql).bind(id, userId).first<StreamMovieRow>();
+    return row ?? null;
+  }
+
+  async findEpisodeStream(userId: string, id: string): Promise<StreamEpisodeRow | null> {
+    const sql = (await this.schemaMode()) === 'legacy' ? STREAM_EPISODE_SQL.legacy : STREAM_EPISODE_SQL.rich;
+    const row = await this.db.prepare(sql).bind(id, userId).first<StreamEpisodeRow>();
+    return row ?? null;
   }
 }

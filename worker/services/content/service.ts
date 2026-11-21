@@ -8,6 +8,7 @@ import type {
   MovieView,
   PageResult,
   SeriesView,
+  StreamResolution,
 } from './types';
 
 export class ContentError extends Error {
@@ -141,5 +142,37 @@ export class ContentService {
     const episode = await this.repository.findEpisode(userId, checkId(id));
     if (!episode) throw new ContentError('not_found', 404, 'Episode not found.');
     return episode;
+  }
+
+  private streamResolution(source: { streamUrl: string; providerType: string } | null): StreamResolution {
+    if (!source) throw new ContentError('not_found', 404, 'Content not found.');
+    if (source.providerType === 'xtream') {
+      return { playable: false, reason: 'xtream_web_playback_unsupported' };
+    }
+    if (source.providerType === 'm3u_file' || source.providerType === 'm3u_url') {
+      if (!source.streamUrl) return { playable: false, reason: 'no_stream_url' };
+      return { playable: true, streamUrl: source.streamUrl };
+    }
+    return { playable: false, reason: 'web_playback_unsupported' };
+  }
+
+  private toStreamSource(row: { stream_url: string; provider_type: string } | null): { streamUrl: string; providerType: string } | null {
+    if (!row) return null;
+    return { streamUrl: row.stream_url, providerType: row.provider_type };
+  }
+
+  async channelStream(userId: string, id: string): Promise<StreamResolution> {
+    const source = await this.repository.findChannelStream(userId, checkId(id));
+    return this.streamResolution(this.toStreamSource(source));
+  }
+
+  async movieStream(userId: string, id: string): Promise<StreamResolution> {
+    const source = await this.repository.findMovieStream(userId, checkId(id));
+    return this.streamResolution(this.toStreamSource(source));
+  }
+
+  async episodeStream(userId: string, id: string): Promise<StreamResolution> {
+    const source = await this.repository.findEpisodeStream(userId, checkId(id));
+    return this.streamResolution(this.toStreamSource(source));
   }
 }

@@ -103,3 +103,10 @@ export interface CatalogQuery {
   page?: number;
   limit?: number;
 }
+
+/** Response from the dedicated stream-resolution endpoint. */
+export interface StreamResolution {
+  playable: boolean;
+  streamUrl?: string;
+  reason?: string;
+}

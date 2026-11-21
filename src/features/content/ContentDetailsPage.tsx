@@ -122,7 +122,7 @@ export function ContentDetailsPage() {
 
   const view = viewFor(kind, item);
   return (
-    <ContentDetail {...view}>
+    <ContentDetail {...view} kind={kind} contentId={item.id}>
       {kind === 'series' && (
         <p className="content-detail__hint">
           <Link to={`/series/${encodeURIComponent(item.id)}`} className="text-link">View seasons and episodes</Link>

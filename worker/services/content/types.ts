@@ -109,3 +109,20 @@ export interface CategoriesQuery {
   page: number;
   limit: number;
 }
+
+/** Minimal data returned by the dedicated stream-resolution endpoint. */
+export interface StreamSource {
+  id: string;
+  streamUrl: string;
+  providerId: string;
+  providerType: string;
+}
+
+/** Response from a dedicated stream-resolution endpoint. */
+export interface StreamResolution {
+  playable: boolean;
+  /** Present only when playable is true. */
+  streamUrl?: string;
+  /** Present only when playable is false. */
+  reason?: string;
+}
