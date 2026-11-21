@@ -37,6 +37,22 @@ class SQLiteStatement {
   first<T>() {
     return (this.db.prepare(this.sql).get(...this.params) as T | undefined) ?? null;
   }
+
+  run() {
+    return this.db.prepare(this.sql).run(...this.params);
+  }
+}
+
+/** D1-compatible adapter for provider repository tests (includes batch/run). */
+export function legacyProviderDatabaseAdapter(db: SqliteDatabase) {
+  return {
+    prepare(sql: string) {
+      return new SQLiteStatement(db, sql);
+    },
+    async batch(statements: Array<{ run(): { changes: number | bigint } }>) {
+      return statements.map((statement) => ({ meta: { changes: Number(statement.run().changes) } }));
+    },
+  };
 }
 
 /**
