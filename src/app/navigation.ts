@@ -51,7 +51,7 @@ export const navGroups: NavGroup[] = [
     label: 'System',
     items: [
       { label: 'Settings', path: '/settings', icon: Settings },
-      { label: 'Profile', path: '/profile', icon: UserRound, phase: 'Phase 2' },
+      { label: 'Profile', path: '/profile', icon: UserRound },
     ],
   },
 ];

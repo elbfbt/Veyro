@@ -9,7 +9,10 @@ import { SearchPage } from './features/search/SearchPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { episodes, movies, series } from './data/demo';
 import { FavoritesPage, HistoryPage, WatchlistPage } from './features/library/LibraryViews';
-import { LogIn, ScreenShare, Smartphone, Tv, UserRound } from 'lucide-react';
+import { LoginPage } from './features/auth/LoginPage';
+import { RegisterPage } from './features/auth/RegisterPage';
+import { ProfilePage } from './features/auth/ProfilePage';
+import { Smartphone, Tv } from 'lucide-react';
 
 const demoNote = 'Showing clearly fictional demo data until you connect your own IPTV source.';
 
@@ -61,19 +64,7 @@ export function App() {
         <Route path="history" element={<HistoryPage />} />
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route
-          path="profile"
-          element={
-            <PhasePage
-              eyebrow="Account"
-              title="Profile"
-              description="Multi-user profiles, devices and sessions."
-              phase="Phase 2"
-              icon={UserRound}
-              bullets={['Secure registration and login', 'Password hashing and sessions', 'Friendly device names']}
-            />
-          }
-        />
+        <Route path="profile" element={<ProfilePage />} />
         <Route path="player/:id" element={<PlayerPage />} />
         <Route
           path="connect"
@@ -101,32 +92,8 @@ export function App() {
             />
           }
         />
-        <Route
-          path="login"
-          element={
-            <PhasePage
-              eyebrow="Welcome back"
-              title="Sign in"
-              description="Secure access to your Veyro account across web and TV devices."
-              phase="Phase 2"
-              icon={LogIn}
-              bullets={['Hashed passwords', 'Secure session cookies', 'Replaceable auth service module']}
-            />
-          }
-        />
-        <Route
-          path="register"
-          element={
-            <PhasePage
-              eyebrow="Get started"
-              title="Create account"
-              description="One account for your playlists, preferences and devices."
-              phase="Phase 2"
-              icon={ScreenShare}
-              bullets={['Email and password registration', 'User-isolated D1 records', 'No provider credentials in accounts']}
-            />
-          }
-        />
+        <Route path="login" element={<LoginPage />} />
+        <Route path="register" element={<RegisterPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

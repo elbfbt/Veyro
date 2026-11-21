@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bell, Menu, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import { Logo } from '../../brand/Logo';
+import { useAuth } from '../../state/AuthContext';
 
 interface TopbarProps {
   sidebarCollapsed: boolean;
@@ -11,6 +12,7 @@ interface TopbarProps {
 
 export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: TopbarProps) {
   const navigate = useNavigate();
+  const { status, user } = useAuth();
   const [query, setQuery] = useState('');
   const [scrolled, setScrolled] = useState(false);
 
@@ -75,14 +77,20 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
         >
           <Bell size={19} />
         </button>
-        <Link
-          to="/profile"
-          className="topbar__avatar"
-          aria-label="Open profile"
-          data-spatial="topbar-profile"
-        >
-          <span aria-hidden="true">V</span>
-        </Link>
+        {status === 'authenticated' && user ? (
+          <Link
+            to="/profile"
+            className="topbar__avatar"
+            aria-label={`Open profile for ${user.displayName}`}
+            data-spatial="topbar-profile"
+          >
+            <span aria-hidden="true">{user.displayName.slice(0, 1).toUpperCase()}</span>
+          </Link>
+        ) : (
+          <Link to="/login?next=%2Fprofile" className="topbar__signin" data-spatial="topbar-signin">
+            Sign in
+          </Link>
+        )}
       </div>
     </header>
   );
