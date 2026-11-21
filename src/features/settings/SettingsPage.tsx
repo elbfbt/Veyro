@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Database, MonitorPlay, Palette, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { usePreferences } from '../../state/PreferencesContext';
+import { useAuth } from '../../state/AuthContext';
 import type { Preferences } from '../../types/domain';
 
 function Toggle({
@@ -60,6 +61,7 @@ function SelectRow<K extends keyof Preferences>({
 
 export function SettingsPage() {
   const { preferences, update, reset } = usePreferences();
+  const { status, user } = useAuth();
 
   return (
     <div className="inner-page settings-page">
@@ -168,7 +170,7 @@ export function SettingsPage() {
         </h2>
         <div className="settings-card">
           <p className="settings-card__note">
-            Provider management is implemented in Phase 3, accounts in Phase 2 and QR pairing in Phase 6.
+            Accounts and sessions are live. Provider management arrives in Phase 3 and QR pairing in Phase 6.
           </p>
           <div className="setting-row setting-row--link">
             <span>
@@ -182,10 +184,14 @@ export function SettingsPage() {
           <div className="setting-row setting-row--link">
             <span>
               <strong>Profile & devices</strong>
-              <small>Register, sessions and friendly device names.</small>
+              <small>
+                {status === 'authenticated' && user
+                  ? `Signed in as ${user.email}`
+                  : 'Register, sessions and friendly device names.'}
+              </small>
             </span>
-            <Link to="/login" className="button button--ghost">
-              Sign in
+            <Link to="/profile" className="button button--ghost">
+              {status === 'authenticated' ? 'Open profile' : 'Sign in'}
             </Link>
           </div>
           <div className="setting-row setting-row--link">

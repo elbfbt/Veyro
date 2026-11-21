@@ -15,9 +15,18 @@ The repository was inspected first: only a two-line `README.md` existed, so no w
 7. Build the cinematic home page with hero carousel and seven horizontal demo rows.
 8. Add original local artwork, tests and documentation; verify typecheck, lint, tests and builds.
 
+## Phase 2 (this implementation)
+
+1. Added migration `0002_auth_security.sql` with rate-limit and password-reset placeholder tables.
+2. Added a replaceable `AuthService` with Web Crypto PBKDF2 hashing, opaque random session tokens and D1 adapters.
+3. Added secure cookie handling, CSRF double-submit validation and same-origin checks in the Worker API.
+4. Added registration, login, logout, `/me`, session listing/revocation, devices and generic password-reset request endpoints.
+5. Replaced the Phase 1 login/register/profile placeholders with real accessible screens.
+6. Added unit/integration tests for hashing, tokens, service rules, authorization, CSRF and user isolation; verified the full D1 flow through Wrangler.
+
 ## Deferred by design
 
-Authentication (2), providers/parser (3), catalogue depth (4), playback engines/reliability (5), pairing (6), EPG/history/devices (7), TV optimization (8), hardening (9). See `README.md` for the full phase table.
+Providers/parser (3), catalogue depth (4), playback engines/reliability (5), pairing (6), EPG/history/sync (7), TV optimization (8), hardening (9). See `README.md` for the full phase table.
 
 ## Dependencies chosen
 
