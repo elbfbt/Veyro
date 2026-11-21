@@ -1,0 +1,23 @@
+# Veyro — single Worker for static assets + API + D1.
+# Secrets are never stored here: use `wrangler secret put NAME`.
+name = "veyro"
+main = "worker/index.ts"
+compatibility_date = "2026-11-21"
+upload_source_maps = true
+
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# API requests always reach the Worker; hashed SPA assets are served directly.
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "veyro-db"
+database_id = "4042ec2d-4af1-4b3d-ab68-673347f3bac1"
+migrations_dir = "./migrations"
+
+[observability]
+enabled = true
+head_sampling_rate = 1

@@ -1,0 +1,320 @@
+import type { ContentRow, HeroSlide, MediaItem } from '../types/domain';
+
+/**
+ * Clearly fictional demo catalogue. Artwork is locally generated and no
+ * provider URLs, subscription details or credentials are bundled with Veyro.
+ */
+const img = (name: string) => `/media/${name}.jpg`;
+
+export const heroSlides: HeroSlide[] = [
+  {
+    id: 'demo-hero-nightfall',
+    kind: 'series',
+    eyebrow: 'Featured on Veyro',
+    headline: 'NIGHTFALL PROTOCOL',
+    title: 'Nightfall Protocol',
+    subtitle: 'S2 E4 · The Origin Signal',
+    description:
+      'A buried transmission rewrites everything the night shift thought it knew. A slow-burn thriller about memory, loyalty and the signals we choose to answer.',
+    image: img('hero-nightfall'),
+    backdrop: img('hero-nightfall'),
+    tags: ['Sci-Fi', 'Thriller', 'Drama'],
+    meta: '2026 · 16+ · 4 episodes available',
+    year: 2026,
+    durationMinutes: 52,
+  },
+  {
+    id: 'demo-hero-transmission',
+    kind: 'series',
+    eyebrow: 'New this week',
+    headline: 'THE LAST TRANSMISSION',
+    title: 'The Last Transmission',
+    subtitle: 'S1 E8 · Static',
+    description:
+      'When a city loses its signal, one night journalist follows a frequency that should not exist. Neon-soaked, atmospheric and impossible to switch off.',
+    image: img('hero-transmission'),
+    backdrop: img('hero-transmission'),
+    tags: ['Mystery', 'Sci-Fi', 'Cinematic'],
+    meta: '2026 · 16+ · Complete season',
+    year: 2026,
+    durationMinutes: 48,
+  },
+  {
+    id: 'demo-hero-orbit',
+    kind: 'movie',
+    eyebrow: 'Veyro spotlight',
+    headline: 'ORBIT ZERO',
+    title: 'Orbit Zero',
+    subtitle: 'Film · 2h 06m',
+    description:
+      'A lone explorer wakes far from the planned landing site. An epic, quietly hopeful journey across a world that remembers more than it says.',
+    image: img('hero-orbit'),
+    backdrop: img('hero-orbit'),
+    tags: ['Adventure', 'Sci-Fi', 'Drama'],
+    meta: '2026 · 13+ · 2h 06m',
+    year: 2026,
+    durationMinutes: 126,
+  },
+];
+
+export const demoItems: MediaItem[] = [
+  {
+    id: 'demo-nightfall-e4',
+    kind: 'episode',
+    title: 'The Origin Signal',
+    subtitle: 'Nightfall Protocol · S2 E4',
+    description: 'The team follows a signal into the old sector.',
+    image: img('card-crimson'),
+    tags: ['Sci-Fi', 'Thriller'],
+    meta: '52 min',
+    durationMinutes: 52,
+    progress: 68,
+  },
+  {
+    id: 'demo-orbit-e2',
+    kind: 'episode',
+    title: 'Pale Horizon',
+    subtitle: 'Orbit Zero · S1 E2',
+    description: 'A supply run becomes a search for the missing crew.',
+    image: img('card-orbit'),
+    tags: ['Adventure'],
+    meta: '44 min',
+    durationMinutes: 44,
+    progress: 31,
+  },
+  {
+    id: 'demo-transmission-e1',
+    kind: 'episode',
+    title: 'Frequency 88.2',
+    subtitle: 'The Last Transmission · S1 E1',
+    description: 'A midnight broadcast changes the city forever.',
+    image: img('card-static'),
+    tags: ['Mystery'],
+    meta: '48 min',
+    durationMinutes: 48,
+    progress: 82,
+  },
+  {
+    id: 'demo-crimson-horizon',
+    kind: 'movie',
+    title: 'Crimson Horizon',
+    subtitle: 'Film',
+    description: 'A courier crosses a divided continent under a violet sky.',
+    image: img('card-desert'),
+    tags: ['Adventure', 'Drama'],
+    meta: '2026 · 1h 58m',
+    year: 2026,
+    durationMinutes: 118,
+  },
+  {
+    id: 'demo-static-bloom',
+    kind: 'movie',
+    title: 'Static Bloom',
+    subtitle: 'Film',
+    description: 'An archivist discovers a garden growing inside an abandoned station.',
+    image: img('card-station'),
+    tags: ['Sci-Fi', 'Mystery'],
+    meta: '2025 · 2h 04m',
+    year: 2025,
+    durationMinutes: 124,
+  },
+  {
+    id: 'demo-quiet-signal',
+    kind: 'movie',
+    title: 'The Quiet Signal',
+    subtitle: 'Film',
+    description: 'Two strangers share a frequency and nothing else.',
+    image: img('card-portrait'),
+    tags: ['Drama', 'Romance'],
+    meta: '2025 · 1h 42m',
+    year: 2025,
+    durationMinutes: 102,
+  },
+  {
+    id: 'demo-parallel-lines',
+    kind: 'series',
+    title: 'Parallel Lines',
+    subtitle: 'Series · 2 seasons',
+    description: 'Commuters on the same train begin to share impossible memories.',
+    image: img('card-city'),
+    tags: ['Sci-Fi', 'Mystery'],
+    meta: '2026 · 2 seasons',
+    year: 2026,
+  },
+  {
+    id: 'demo-forest-protocol',
+    kind: 'series',
+    title: 'Forest Protocol',
+    subtitle: 'Series · 1 season',
+    description: 'A remote research post receives visitors who know its staff too well.',
+    image: img('card-forest'),
+    tags: ['Thriller', 'Drama'],
+    meta: '2025 · 1 season',
+    year: 2025,
+  },
+  {
+    id: 'demo-veyro-one',
+    kind: 'channel',
+    title: 'VEYRO ONE',
+    subtitle: 'General · Channel 001',
+    description: 'A fictional demo channel: documentaries, talk and late-night cinema.',
+    image: img('hero-transmission'),
+    tags: ['General', 'HD'],
+    meta: 'Channel 001',
+    channelNumber: '001',
+    isLive: true,
+    badge: 'LIVE',
+    now: { title: 'The Night Desk', start: '21:00', end: '22:00', description: 'Daily wrap-up.' },
+    next: { title: 'Open Frequency', start: '22:00', end: '23:00' },
+  },
+  {
+    id: 'demo-pulse-music',
+    kind: 'channel',
+    title: 'Pulse Music',
+    subtitle: 'Music · Channel 012',
+    description: 'A fictional demo channel: independent music around the clock.',
+    image: img('card-portrait'),
+    tags: ['Music', 'HD'],
+    meta: 'Channel 012',
+    channelNumber: '012',
+    isLive: true,
+    badge: 'LIVE',
+    now: { title: 'After Hours', start: '20:00', end: '23:00' },
+    next: { title: 'Morning Signal', start: '23:00', end: '06:00' },
+  },
+  {
+    id: 'demo-nomad-nature',
+    kind: 'channel',
+    title: 'Nomad Nature',
+    subtitle: 'Nature · Channel 024',
+    description: 'A fictional demo channel: wild places and slow television.',
+    image: img('card-forest'),
+    tags: ['Nature', '4K'],
+    meta: 'Channel 024',
+    channelNumber: '024',
+    isLive: true,
+    badge: 'LIVE',
+    now: { title: 'Northern Light', start: '19:30', end: '21:00' },
+    next: { title: 'Forest Floor', start: '21:00', end: '22:30' },
+  },
+  {
+    id: 'demo-signal-sports',
+    kind: 'channel',
+    title: 'Signal Sports',
+    subtitle: 'Sports · Channel 031',
+    description: 'A fictional demo channel: highlights and analysis.',
+    image: img('card-city'),
+    tags: ['Sports', 'HD'],
+    meta: 'Channel 031',
+    channelNumber: '031',
+    isLive: true,
+    badge: 'LIVE',
+    now: { title: 'The Evening Review', start: '20:30', end: '22:00' },
+    next: { title: 'Classic Matches', start: '22:00', end: '00:00' },
+  },
+  {
+    id: 'demo-nightfall-series',
+    kind: 'series',
+    title: 'Nightfall Protocol',
+    subtitle: 'Series · 2 seasons',
+    description: 'The night shift discovers a second moon in the transmission.',
+    image: img('hero-nightfall'),
+    backdrop: img('hero-nightfall'),
+    tags: ['Sci-Fi', 'Thriller'],
+    meta: '2026 · 2 seasons',
+    year: 2026,
+  },
+  {
+    id: 'demo-orbit-movie',
+    kind: 'movie',
+    title: 'Orbit Zero',
+    subtitle: 'Film',
+    description: 'An explorer walks a planet that refuses to stay still.',
+    image: img('card-orbit'),
+    backdrop: img('hero-orbit'),
+    tags: ['Adventure', 'Sci-Fi'],
+    meta: '2026 · 2h 06m',
+    year: 2026,
+    durationMinutes: 126,
+  },
+  {
+    id: 'demo-new-transmission',
+    kind: 'episode',
+    title: 'The Last Transmission',
+    subtitle: 'New episode · S1 E8',
+    description: 'The city answers back.',
+    image: img('hero-transmission'),
+    tags: ['Mystery'],
+    meta: '48 min',
+    durationMinutes: 48,
+  },
+];
+
+const byId = new Map<string, MediaItem>(
+  [...demoItems, ...heroSlides.map(({ eyebrow: _eyebrow, headline: _headline, ...item }) => item)].map(
+    (item) => [item.id, item],
+  ),
+);
+
+const row = (id: string, title: string, ids: string[]): ContentRow => ({
+  id,
+  title,
+  items: ids.flatMap((itemId) => {
+    const item = byId.get(itemId);
+    return item ? [item] : [];
+  }),
+});
+
+export const contentRows: ContentRow[] = [
+  row('continue', 'Continue Watching', [
+    'demo-nightfall-e4',
+    'demo-orbit-e2',
+    'demo-transmission-e1',
+    'demo-quiet-signal',
+  ]),
+  row('recent', 'Recently Watched', [
+    'demo-static-bloom',
+    'demo-forest-protocol',
+    'demo-crimson-horizon',
+    'demo-parallel-lines',
+  ]),
+  row('favorite-channels', 'Favorite Channels', [
+    'demo-veyro-one',
+    'demo-pulse-music',
+    'demo-nomad-nature',
+    'demo-signal-sports',
+  ]),
+  row('popular-movies', 'Popular Movies', [
+    'demo-crimson-horizon',
+    'demo-orbit-movie',
+    'demo-static-bloom',
+    'demo-quiet-signal',
+  ]),
+  row('popular-series', 'Popular TV Shows', [
+    'demo-nightfall-series',
+    'demo-parallel-lines',
+    'demo-forest-protocol',
+    'demo-new-transmission',
+  ]),
+  row('live-channels', 'Live Channels', [
+    'demo-veyro-one',
+    'demo-signal-sports',
+    'demo-pulse-music',
+    'demo-nomad-nature',
+  ]),
+  row('recently-added', 'Recently Added', [
+    'demo-new-transmission',
+    'demo-orbit-movie',
+    'demo-forest-protocol',
+    'demo-static-bloom',
+  ]),
+];
+
+export const liveChannels = demoItems.filter((item) => item.kind === 'channel');
+export const movies = demoItems.filter((item) => item.kind === 'movie');
+export const series = demoItems.filter((item) => item.kind === 'series');
+export const episodes = demoItems.filter((item) => item.kind === 'episode');
+
+export function findDemoItem(id: string): MediaItem | undefined {
+  return byId.get(id);
+}
