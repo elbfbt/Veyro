@@ -430,4 +430,128 @@ describe('stream resolution API (rich schema)', () => {
 
     expect((await harnessB.call('GET', '/api/channels/ch-x1/stream')).status).toBe(404);
   });
+
+  it('rejects javascript: stream URL at stream resolution', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-unsafe-js', USER_A, 'prov-a', null, 'ext-unsafe-js', 'Unsafe JS Channel', 'javascript:alert(1)', 100, 100);
+
+    await register(harnessA, 'stream-unsafe-js@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-unsafe-js/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'unsafe_stream_url' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('rejects data: stream URL at stream resolution', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO movies (id, user_id, provider_id, category_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('mv-unsafe-data', USER_A, 'prov-a', null, 'ext-unsafe-data', 'Unsafe Data Movie', 'data:video/mp4;base64,AAAA', 100, 100);
+
+    await register(harnessA, 'stream-unsafe-data@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-unsafe-data/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'unsafe_stream_url' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('rejects file: stream URL at stream resolution', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO episodes (id, user_id, provider_id, series_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ep-unsafe-file', USER_A, 'prov-a', 'se-a1', 'ext-unsafe-file', 'Unsafe File Episode', 'file:///etc/passwd', 100, 100);
+
+    await register(harnessA, 'stream-unsafe-file@example.com');
+
+    const response = await harnessA.call('GET', '/api/episodes/ep-unsafe-file/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'unsafe_stream_url' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('accepts http:// stream URL at stream resolution', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-safe-http', USER_A, 'prov-a', null, 'ext-safe-http', 'Safe HTTP Channel', 'http://stream.example.com/safe.m3u8', 100, 100);
+
+    await register(harnessA, 'stream-safe-http@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-safe-http/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'http://stream.example.com/safe.m3u8' });
+  });
+
+  it('accepts https:// stream URL at stream resolution', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO movies (id, user_id, provider_id, category_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('mv-safe-https', USER_A, 'prov-a', null, 'ext-safe-https', 'Safe HTTPS Movie', 'https://stream.example.com/safe.mp4', 100, 100);
+
+    await register(harnessA, 'stream-safe-https@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-safe-https/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.example.com/safe.mp4' });
+  });
+
+  it('does not expose unsafe stream URL in playback API response', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-no-leak', USER_A, 'prov-a', null, 'ext-no-leak', 'No Leak Channel', 'javascript:alert(document.cookie)', 100, 100);
+
+    await register(harnessA, 'stream-no-leak@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-no-leak/stream');
+    const text = await response.text();
+    const body = JSON.parse(text);
+    expect(body.stream.playable).toBe(false);
+    expect(body.stream.streamUrl).toBeUndefined();
+    expect(text).not.toContain('javascript:');
+    expect(text).not.toContain('alert');
+  });
+
+  it('Xtream stream remains playable:false with no stream URL', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x2', USER_A, 'Provider X2', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-x2', USER_A, 'prov-x2', null, 'ext-x2', 'Xtream Channel 2', 'xtream://channel/2', 100, 100);
+
+    await register(harnessA, 'stream-xtream-2@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-x2/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
 });

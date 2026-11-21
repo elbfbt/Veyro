@@ -74,6 +74,16 @@ function checkId(id: string | undefined): string {
   return id;
 }
 
+/** Only HTTP(S) stream URLs are safe for browser playback. */
+function isSafeStreamUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export class ContentService {
   constructor(private readonly repository: D1ContentRepository) {}
 
@@ -151,6 +161,9 @@ export class ContentService {
     }
     if (source.providerType === 'm3u_file' || source.providerType === 'm3u_url') {
       if (!source.streamUrl) return { playable: false, reason: 'no_stream_url' };
+      if (!isSafeStreamUrl(source.streamUrl)) {
+        return { playable: false, reason: 'unsafe_stream_url' };
+      }
       return { playable: true, streamUrl: source.streamUrl };
     }
     return { playable: false, reason: 'web_playback_unsupported' };
