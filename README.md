@@ -2,7 +2,7 @@
 
 **Veyro is an IPTV client, not an IPTV provider.** Users bring their own M3U playlist or provider credentials. Veyro stores configuration and metadata, but **never relays continuous IPTV video traffic** — streams play directly from the user's provider to their device.
 
-Phase 2 adds real accounts and sessions on top of the Phase 1 foundation: React/Vite SPA, a single Cloudflare Worker with D1 binding, a premium dark streaming UI, responsive shell and clearly marked demo content.
+Phase 2 adds real accounts and sessions; Phase 3 adds ownership-scoped IPTV providers, M3U parsing/imports and credential encryption on top of the Phase 1 foundation: React/Vite SPA, a single Cloudflare Worker with D1 binding, a premium dark streaming UI, responsive shell and clearly marked demo content.
 
 ## Stack
 
@@ -28,6 +28,7 @@ src/
 worker/
   http/           Cookie and CSRF helpers
   services/auth/  Replaceable auth service, D1 adapters, Web Crypto hashing
+  services/iptv/  M3U parser, classifier, URL safety, credential cipher, provider repository/service
   api.ts          Route table and request validation
   index.ts        Worker entry point
 migrations/       D1 SQL migrations
@@ -67,7 +68,7 @@ No credentials are stored in the repository. Copy `.env.example` to `.env` local
 ```bash
 # Reserved for future signing; Phase 2 sessions use hashed opaque tokens.
 wrangler secret put VEYRO_SESSION_SECRET
-# Will encrypt provider credentials in Phase 3.
+# Required for saving Xtream credentials: openssl rand -hex 32
 wrangler secret put VEYRO_PROVIDER_SECRET
 ```
 
@@ -80,7 +81,7 @@ npm run deploy
 
 If deploying through a Cloudflare Git integration instead of the npm script, add
 `npm run migrate:remote` as a build step. Deploying Worker code without applying
-D1 migrations leaves the auth tables missing in production.
+D1 migrations leaves the auth and provider tables missing in production. Phase 3 reuses the existing tables from `0001_initial_schema.sql`, so no new migration was required.
 
 ### Troubleshooting: registration returns 503 `schema_not_migrated`
 
@@ -102,6 +103,39 @@ around a schema error.
 `/`, `/live`, `/movies`, `/series`, `/search`, `/library`, `/favorites`, `/history`, `/watchlist`, `/settings`, `/profile`, `/player/:id`, `/connect`, `/tv/pair`, `/login`, `/register`.
 
 Login, registration and profile are now real screens. Other later-phase routes show honest "planned" screens rather than fake forms or simulated playback.
+
+## Provider API
+
+All provider routes require a session and, for state changes, a CSRF token. Every
+query is scoped to the signed-in user. Passwords are encrypted with
+`VEYRO_PROVIDER_SECRET` and are never returned by an API response.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/providers` | Lists the current user's providers |
+| POST | `/api/providers` | Adds an M3U URL or Xtream provider |
+| POST | `/api/providers/import` | Uploads and imports an `.m3u`/`.m3u8` file |
+| GET | `/api/providers/:id` | Reads one owned provider |
+| PATCH | `/api/providers/:id` | Renames, reconfigures or enables/disables it |
+| DELETE | `/api/providers/:id` | Removes it and its catalog rows via foreign keys |
+| POST | `/api/providers/:id/test` | Reports reachability of the provider URL |
+| POST | `/api/providers/:id/refresh` | Bounded manifest fetch, parse and catalogue upsert |
+| POST | `/api/providers/:id/default` | Marks it as the user's default |
+
+M3U URLs are fetched with a 10-second timeout, at most three manual redirects,
+a 5 MiB body cap and 20,000-entry cap. URL shape, redirect targets and DNS
+answers are checked for private/local addresses.
+
+Xtream refreshes are performed entirely by the Worker. Saved credentials are
+decrypted in memory, used to construct the conventional `player_api.php`
+requests, and discarded. Credential-bearing upstream URLs are never returned,
+logged or stored. The Worker imports live categories/channels, VOD
+categories/movies, series categories/series and series episodes into the same
+normalized tables. Catalogue responses are JSON with a 2 MiB cap and a 10-second
+timeout and an 8 MiB total response budget; episode details are fetched for the
+first 25 series per refresh within a 30-second overall request budget.
+Uploaded files are imported once; upload a new file to replace their catalogue.
+Veyro does not proxy, relay or play streams in Phase 3.
 
 ## Authentication API
 
