@@ -150,6 +150,8 @@ export interface ImportJob {
   importedEntries: number;
   totalChunks: number;
   completedChunks: number;
+  lastProcessedChunk: number;
+  lastChunkHash: string | null;
   status: ImportJobStatus;
   error: string | null;
   createdAt: number;
@@ -208,11 +210,13 @@ export interface ProviderRepository {
     totalChunks: number,
     now: number,
   ): Promise<string>;
-  getImportJob(userId: string, jobId: string): Promise<ImportJob | null>;
+  getImportJob(userId: string, jobId: string, now: number): Promise<ImportJob | null>;
   updateImportJob(
     userId: string,
     jobId: string,
-    patch: Partial<ImportJob>,
+    patch: Partial<Pick<ImportJob, 'importedEntries' | 'completedChunks' | 'lastProcessedChunk' | 'lastChunkHash' | 'status' | 'error' | 'updatedAt'>>,
     now: number,
+    expectedCompletedChunks?: number,
+    expectedLastProcessedChunk?: number,
   ): Promise<boolean>;
 }

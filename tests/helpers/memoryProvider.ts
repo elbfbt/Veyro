@@ -113,25 +113,43 @@ export class MemoryProviderRepository implements ProviderRepository {
       importedEntries: 0,
       totalChunks,
       completedChunks: 0,
+      lastProcessedChunk: -1,
+      lastChunkHash: null,
       status: 'pending' as ImportJobStatus,
       error: null,
       createdAt: now,
       updatedAt: now,
-      expiresAt: now + 24 * 60 * 60 * 1000,
+      expiresAt: now + 24 * 60 * 60,
     };
     this.importJobs.set(id, job);
     return id;
   }
 
-  async getImportJob(userId: string, jobId: string) {
+  async getImportJob(userId: string, jobId: string, now: number) {
     const job = this.importJobs.get(jobId);
-    if (!job || job.userId !== userId) return null;
+    if (!job || job.userId !== userId || job.expiresAt <= now) return null;
     return job;
   }
 
-  async updateImportJob(userId: string, jobId: string, patch: Partial<ImportJob>, now: number) {
-    const job = await this.getImportJob(userId, jobId);
+  async updateImportJob(
+    userId: string,
+    jobId: string,
+    patch: Partial<ImportJob>,
+    now: number,
+    expectedCompletedChunks?: number,
+    expectedLastProcessedChunk?: number,
+  ) {
+    const job = await this.getImportJob(userId, jobId, now);
     if (!job) return false;
+
+    // Atomic sequencing: only advance if the job is still at the expected position.
+    if (expectedCompletedChunks !== undefined && job.completedChunks !== expectedCompletedChunks) {
+      return false;
+    }
+    if (expectedLastProcessedChunk !== undefined && job.lastProcessedChunk !== expectedLastProcessedChunk) {
+      return false;
+    }
+
     this.importJobs.set(jobId, { ...job, ...patch, updatedAt: now });
     return true;
   }

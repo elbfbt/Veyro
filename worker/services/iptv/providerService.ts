@@ -45,6 +45,15 @@ function isSafeStreamUrl(value: string): boolean {
   }
 }
 
+/** Hash a chunk's entries for idempotent retry detection. */
+async function hashChunkPayload(entries: M3uEntry[]): Promise<string> {
+  const payload = JSON.stringify(
+    entries.map((e) => ({ externalId: e.externalId, name: e.name, streamUrl: e.streamUrl })),
+  );
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+  return toBase64Url(new Uint8Array(digest));
+}
+
 function validName(value: unknown): string {
   const name = typeof value === 'string' ? value.trim().slice(0, 80) : '';
   if (!name) throw new ProviderError('validation_error', 400, 'Enter a provider name.');
@@ -381,6 +390,12 @@ export class ProviderService {
       now,
     );
 
+    // Mark the provider as import-in-progress so it is visibly incomplete
+    // until importComplete marks it active.
+    await this.repository.update(userId, stored.id, {
+      metadata: { import_job_id: jobId, import_status: 'importing' },
+    }, now);
+
     await this.repository.updateImportJob(userId, jobId, { status: 'importing' }, now);
 
     return { jobId, providerId: stored.id };
@@ -391,12 +406,42 @@ export class ProviderService {
     jobId: string,
     chunkIndex: number,
     entries: M3uEntry[],
-  ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }> {
+  ): Promise<{ chunkIndex: number; status: 'completed' | 'importing'; importedEntries: number }> {
     const now = this.clock.now();
 
-    const job = await this.repository.getImportJob(userId, jobId);
+    const job = await this.repository.getImportJob(userId, jobId, now);
     if (!job) {
       throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    if (entries.length === 0) {
+      throw new ProviderError('validation_error', 400, 'Chunk must contain at least one entry.');
+    }
+
+    if (chunkIndex < 0 || chunkIndex >= job.totalChunks) {
+      throw new ProviderError('validation_error', 400, 'Chunk index out of range.');
+    }
+
+    // Idempotency: retry of the just-completed chunk with the same payload.
+    // Checked before the status check so a lost-response retry of the final
+    // chunk (job already 'completed') still succeeds.
+    if (chunkIndex === job.lastProcessedChunk) {
+      const retryHash = await hashChunkPayload(entries);
+      if (retryHash === job.lastChunkHash) {
+        // Same chunk, same payload — already processed. Return success without
+        // double-counting imported_entries or advancing completed_chunks.
+        return {
+          chunkIndex,
+          status: chunkIndex + 1 >= job.totalChunks ? 'completed' : 'importing',
+          importedEntries: job.importedEntries,
+        };
+      }
+      // Same chunk index but different payload — reject.
+      throw new ProviderError(
+        'validation_error',
+        409,
+        `Chunk ${chunkIndex} already processed with a different payload.`,
+      );
     }
 
     if (job.status !== 'importing') {
@@ -407,10 +452,7 @@ export class ProviderService {
       );
     }
 
-    if (chunkIndex < 0 || chunkIndex >= job.totalChunks) {
-      throw new ProviderError('validation_error', 400, 'Chunk index out of range.');
-    }
-
+    // Sequential enforcement: must be the next expected chunk.
     if (chunkIndex !== job.completedChunks) {
       throw new ProviderError(
         'validation_error',
@@ -450,27 +492,41 @@ export class ProviderService {
     const importedEntries = job.importedEntries + entries.length;
     const completedChunks = job.completedChunks + 1;
     const isFinal = completedChunks >= job.totalChunks;
+    const chunkHash = await hashChunkPayload(entries);
 
-    await this.repository.updateImportJob(
+    const advanced = await this.repository.updateImportJob(
       userId,
       jobId,
       {
         importedEntries,
         completedChunks,
+        lastProcessedChunk: chunkIndex,
+        lastChunkHash: chunkHash,
         status: isFinal ? 'completed' : 'importing',
       },
       now,
+      job.completedChunks,   // expected completed_chunks
+      job.lastProcessedChunk, // expected last_processed_chunk
     );
+
+    if (!advanced) {
+      throw new ProviderError(
+        'validation_error',
+        409,
+        'Chunk was processed by another request. Retry with the next chunk.',
+      );
+    }
 
     return {
       chunkIndex,
-      status: isFinal ? 'completed' : 'completed',
+      status: isFinal ? 'completed' : 'importing',
       importedEntries,
     };
   }
 
   async getImportProgress(userId: string, jobId: string): Promise<ImportProgress> {
-    const job = await this.repository.getImportJob(userId, jobId);
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
     if (!job) {
       throw new ProviderError('not_found', 404, 'Import job not found.');
     }
@@ -493,7 +549,8 @@ export class ProviderService {
   }
 
   async importComplete(userId: string, jobId: string): Promise<ProviderView> {
-    const job = await this.repository.getImportJob(userId, jobId);
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
     if (!job) {
       throw new ProviderError('not_found', 404, 'Import job not found.');
     }
@@ -513,6 +570,13 @@ export class ProviderService {
         'Import incomplete: not all entries were processed.',
       );
     }
+
+    // Mark the provider as fully imported and active. Clearing the import
+    // metadata makes it indistinguishable from any other completed provider.
+    await this.repository.update(userId, job.providerId, {
+      metadata: {},
+      status: 'active',
+    }, now);
 
     return this.get(userId, job.providerId);
   }

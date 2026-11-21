@@ -762,19 +762,19 @@ export class D1ProviderRepository {
     await this.monitoredBatch('import_job.create', [
       this.db
         .prepare(
-          'INSERT INTO import_jobs (id, user_id, provider_id, filename, total_entries, total_chunks, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO import_jobs (id, user_id, provider_id, filename, total_entries, total_chunks, last_processed_chunk, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         )
-        .bind(jobId, userId, providerId, filename, totalEntries, totalChunks, 'pending', now, now, expiresAt),
+        .bind(jobId, userId, providerId, filename, totalEntries, totalChunks, -1, 'pending', now, now, expiresAt),
     ]);
     return jobId;
   }
 
-  async getImportJob(userId: string, jobId: string): Promise<ImportJob | null> {
+  async getImportJob(userId: string, jobId: string, now: number): Promise<ImportJob | null> {
     const row = await this.db
       .prepare(
-        'SELECT id, user_id, provider_id, filename, total_entries, imported_entries, total_chunks, completed_chunks, status, error, created_at, updated_at, expires_at FROM import_jobs WHERE id = ? AND user_id = ?',
+        'SELECT id, user_id, provider_id, filename, total_entries, imported_entries, total_chunks, completed_chunks, last_processed_chunk, last_chunk_hash, status, error, created_at, updated_at, expires_at FROM import_jobs WHERE id = ? AND user_id = ? AND expires_at > ?',
       )
-      .bind(jobId, userId)
+      .bind(jobId, userId, now)
       .first<{
         id: string;
         user_id: string;
@@ -784,6 +784,8 @@ export class D1ProviderRepository {
         imported_entries: number;
         total_chunks: number;
         completed_chunks: number;
+        last_processed_chunk: number;
+        last_chunk_hash: string | null;
         status: ImportJobStatus;
         error: string | null;
         created_at: number;
@@ -800,6 +802,8 @@ export class D1ProviderRepository {
       importedEntries: row.imported_entries,
       totalChunks: row.total_chunks,
       completedChunks: row.completed_chunks,
+      lastProcessedChunk: row.last_processed_chunk,
+      lastChunkHash: row.last_chunk_hash,
       status: row.status,
       error: row.error,
       createdAt: row.created_at,
@@ -811,14 +815,18 @@ export class D1ProviderRepository {
   async updateImportJob(
     userId: string,
     jobId: string,
-    patch: Partial<Pick<ImportJob, 'importedEntries' | 'completedChunks' | 'status' | 'error' | 'updatedAt'>>,
+    patch: Partial<Pick<ImportJob, 'importedEntries' | 'completedChunks' | 'lastProcessedChunk' | 'lastChunkHash' | 'status' | 'error' | 'updatedAt'>>,
     now: number,
+    expectedCompletedChunks?: number,
+    expectedLastProcessedChunk?: number,
   ): Promise<boolean> {
     const columns: string[] = [];
     const values: BindValue[] = [];
     const fields: Array<[string, BindValue | undefined]> = [
       ['imported_entries', patch.importedEntries !== undefined ? patch.importedEntries : undefined],
       ['completed_chunks', patch.completedChunks !== undefined ? patch.completedChunks : undefined],
+      ['last_processed_chunk', patch.lastProcessedChunk !== undefined ? patch.lastProcessedChunk : undefined],
+      ['last_chunk_hash', patch.lastChunkHash !== undefined ? patch.lastChunkHash : undefined],
       ['status', patch.status !== undefined ? patch.status : undefined],
       ['error', patch.error !== undefined ? patch.error : undefined],
       ['updated_at', now],
@@ -830,9 +838,23 @@ export class D1ProviderRepository {
       }
     }
     if (columns.length === 0) return true;
+
+    let sql = `UPDATE import_jobs SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`;
+    const bindValues: BindValue[] = [...values, jobId, userId];
+
+    // Atomic sequencing: only advance if the job is still at the expected position.
+    if (expectedCompletedChunks !== undefined) {
+      sql += ` AND completed_chunks = ?`;
+      bindValues.push(expectedCompletedChunks);
+    }
+    if (expectedLastProcessedChunk !== undefined) {
+      sql += ` AND last_processed_chunk = ?`;
+      bindValues.push(expectedLastProcessedChunk);
+    }
+
     const result = await this.monitoredRun(
       'import_job.update',
-      this.db.prepare(`UPDATE import_jobs SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`).bind(...values, jobId, userId),
+      this.db.prepare(sql).bind(...bindValues),
     );
     return (result.meta.changes ?? 0) > 0;
   }

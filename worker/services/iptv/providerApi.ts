@@ -46,7 +46,7 @@ export interface ProviderApiService {
     jobId: string,
     chunkIndex: number,
     entries: M3uEntry[],
-  ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }>;
+  ): Promise<{ chunkIndex: number; status: 'completed' | 'importing'; importedEntries: number }>;
   getImportProgress(userId: string, jobId: string): Promise<ImportProgress>;
   importComplete(userId: string, jobId: string): Promise<ProviderView>;
 }

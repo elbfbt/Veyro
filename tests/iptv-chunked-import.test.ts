@@ -321,7 +321,7 @@ describe('chunked M3U import', () => {
 
   it('enforces ownership — other user cannot access job', async () => {
     const { harness, other } = setup();
-    const ownerId = await register(harness, 'owner@example.com');
+    await register(harness, 'owner@example.com');
     await register(other, 'other@example.com');
 
     const { jobId } = await initJob(harness, 1, 1);
@@ -388,5 +388,216 @@ describe('chunked M3U import', () => {
     expect(progress!.importedEntries).toBe(3000);
     expect(progress!.completedChunks).toBe(3);
     expect(progress!.percentage).toBe(3);
+  });
+
+  /* ── Idempotency & retry ────────────────────────────────────── */
+
+  it('rejects empty chunks', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 1, 1);
+    await submitChunk(harness, jobId, 0, [], 400);
+  });
+
+  it('allows identical chunk retry without double-counting', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 1);
+    const entries = [makeEntry(0), makeEntry(1)];
+
+    // First submission succeeds
+    const first = await submitChunk(harness, jobId, 0, entries);
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.importedEntries).toBe(2);
+
+    // Identical retry (lost response scenario) — same chunkIndex, same payload
+    const retry = await submitChunk(harness, jobId, 0, entries);
+    expect(retry.status).toBe(200);
+    const retryBody = await retry.json();
+    expect(retryBody.importedEntries).toBe(2); // not double-counted
+
+    // Progress still shows 2 entries, 1 chunk
+    const progress = await getProgress(harness, jobId);
+    expect(progress!.importedEntries).toBe(2);
+    expect(progress!.completedChunks).toBe(1);
+  });
+
+  it('rejects chunk retry with different payload', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 1);
+    const entriesA = [makeEntry(0, { externalId: 'id-a' })];
+    const entriesB = [makeEntry(0, { externalId: 'id-b' })];
+
+    await submitChunk(harness, jobId, 0, entriesA);
+
+    // Same chunk index, different payload → conflict
+    await submitChunk(harness, jobId, 0, entriesB, 409);
+  });
+
+  it('concurrent duplicate submissions do not double-count', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 1);
+    const entries = [makeEntry(0), makeEntry(1)];
+
+    // Submit the same chunk twice concurrently (direct harness calls to capture both outcomes)
+    const results = await Promise.all([
+      harness.call('POST', `/api/providers/import-chunk/${jobId}`, { chunkIndex: 0, entries }),
+      harness.call('POST', `/api/providers/import-chunk/${jobId}`, { chunkIndex: 0, entries }),
+    ]);
+
+    // Exactly one should succeed, the other gets a conflict
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 200).length).toBe(1);
+    expect(statuses.filter((s) => s === 409).length).toBe(1);
+
+    // No double-counting
+    const progress = await getProgress(harness, jobId);
+    expect(progress!.importedEntries).toBe(2);
+    expect(progress!.completedChunks).toBe(1);
+  });
+
+  it('lost-response retry then continues to next chunk', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 4, 2);
+
+    // Chunk 0 succeeds
+    const chunk0 = [makeEntry(0), makeEntry(1)];
+    await submitChunk(harness, jobId, 0, chunk0);
+
+    // Lost response — retry chunk 0 with identical payload
+    await submitChunk(harness, jobId, 0, chunk0);
+
+    // Continue with chunk 1
+    const chunk1 = [makeEntry(2), makeEntry(3)];
+    await submitChunk(harness, jobId, 1, chunk1);
+
+    const progress = await getProgress(harness, jobId);
+    expect(progress!.status).toBe('completed');
+    expect(progress!.importedEntries).toBe(4);
+    expect(progress!.completedChunks).toBe(2);
+  });
+
+  /* ── Expiry ─────────────────────────────────────────────────── */
+
+  async function createExpiredJob(
+    harness: ReturnType<typeof setup>['harness'],
+    repository: MemoryProviderRepository,
+    _userId: string,
+  ) {
+    const { jobId, providerId } = await initJob(harness, 1, 1);
+    // Manually expire the job by setting expiresAt to the past
+    const job = repository.importJobs.get(jobId);
+    if (job) {
+      job.expiresAt = 1; // far in the past
+      repository.importJobs.set(jobId, job);
+    }
+    return { jobId, providerId };
+  }
+
+  it('expired job cannot accept chunks', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'owner@example.com');
+
+    const { jobId } = await createExpiredJob(harness, repository, userId);
+    await submitChunk(harness, jobId, 0, [makeEntry(0)], 404);
+  });
+
+  it('expired job cannot be queried for progress', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await createExpiredJob(harness, repository, 'owner@example.com');
+    await getProgress(harness, jobId, 404);
+  });
+
+  it('expired job cannot be completed', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await createExpiredJob(harness, repository, 'owner@example.com');
+    await completeJob(harness, jobId, 404);
+  });
+
+  /* ── Provider visibility / state ───────────────────────────── */
+
+  it('provider is not active before import completion', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'owner@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 2, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0), makeEntry(1)]);
+
+    // Provider exists but is still in importing state (metadata has import_status)
+    const provider = await repository.find(userId, providerId);
+    expect(provider).not.toBeNull();
+    expect(provider!.metadata.import_status).toBe('importing');
+    expect(provider!.metadata.import_job_id).toBe(jobId);
+  });
+
+  it('provider becomes active only after importComplete', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'owner@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 1, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+
+    // Before completion: still importing
+    let provider = await repository.find(userId, providerId);
+    expect(provider!.metadata.import_status).toBe('importing');
+
+    // After completion: active, metadata cleared
+    await completeJob(harness, jobId);
+    provider = await repository.find(userId, providerId);
+    expect(provider!.metadata.import_status).toBeUndefined();
+    expect(provider!.status).toBe('active');
+  });
+
+  it('incomplete import cannot be finalized', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 2);
+    // Submit only chunk 0, leaving chunk 1 pending
+    await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+
+    // importComplete should fail because not all chunks are done
+    await completeJob(harness, jobId, 400);
+
+    // Provider should not be active
+    const allProviders = await repository.list(userId);
+    expect(allProviders.length).toBeGreaterThan(0);
+    const importedProvider = allProviders.find((p) => p.metadata.import_status === 'importing');
+    expect(importedProvider).not.toBeUndefined();
+  });
+
+  it('chunk response status is importing for non-final chunks', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 2, 2);
+    const result = await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+    expect(result.status).toBe(200);
+    const body = await result.json();
+    expect(body.status).toBe('importing');
+  });
+
+  it('chunk response status is completed for final chunk', async () => {
+    const { harness } = setup();
+    await register(harness, 'owner@example.com');
+
+    const { jobId } = await initJob(harness, 1, 1);
+    const result = await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+    expect(result.status).toBe(200);
+    const body = await result.json();
+    expect(body.status).toBe('completed');
   });
 });

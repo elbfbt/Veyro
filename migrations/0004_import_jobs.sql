@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS import_jobs (
   imported_entries   INTEGER NOT NULL DEFAULT 0,
   total_chunks       INTEGER NOT NULL DEFAULT 0,
   completed_chunks   INTEGER NOT NULL DEFAULT 0,
+  last_processed_chunk INTEGER NOT NULL DEFAULT -1,
+  last_chunk_hash    TEXT,
   status             TEXT NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending', 'importing', 'completed', 'failed', 'expired')),
   error              TEXT,
