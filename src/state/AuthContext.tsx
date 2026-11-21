@@ -106,6 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await apiRequest<{ ok: boolean }>('/auth/logout', { method: 'POST' });
+    const csrf = await apiRequest<{ csrfToken: string }>('/auth/csrf');
+    setCsrfToken(csrf.csrfToken);
     setUser(null);
     setSessionId(null);
     setStatus('anonymous');
