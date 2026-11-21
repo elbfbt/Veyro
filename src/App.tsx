@@ -45,7 +45,9 @@ export function App() {
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="profile" element={<ProfilePage />} />
-        <Route path="player/:id" element={<PlayerPage />} />
+        <Route path="player/channel/:id" element={<PlayerPage />} />
+        <Route path="player/movie/:id" element={<PlayerPage />} />
+        <Route path="player/episode/:id" element={<PlayerPage />} />
         <Route
           path="connect"
           element={

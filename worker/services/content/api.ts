@@ -13,8 +13,11 @@ export interface ContentApiService {
   categories(userId: string, params: URLSearchParams): Promise<unknown>;
   channel(userId: string, id: string): Promise<unknown>;
   movie(userId: string, id: string): Promise<unknown>;
+  channelStream(userId: string, id: string): Promise<unknown>;
+  movieStream(userId: string, id: string): Promise<unknown>;
   seriesDetail(userId: string, id: string): Promise<unknown>;
   episodes(userId: string, id: string, params: URLSearchParams): Promise<unknown>;
+  episodeStream(userId: string, id: string): Promise<unknown>;
   episode(userId: string, id: string): Promise<unknown>;
 }
 
@@ -61,6 +64,13 @@ export async function handleContentApi(
 
     if (resource === 'series' && segments[3] === 'episodes') {
       return page('episodes', await service.episodes(userId, id, url.searchParams));
+    }
+
+    if (segments.length === 4 && segments[3] === 'stream') {
+      if (resource === 'channels') return json({ stream: await service.channelStream(userId, id) });
+      if (resource === 'movies') return json({ stream: await service.movieStream(userId, id) });
+      if (resource === 'episodes') return json({ stream: await service.episodeStream(userId, id) });
+      return null;
     }
     return null;
   } catch (error) {

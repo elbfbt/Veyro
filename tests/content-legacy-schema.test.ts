@@ -248,3 +248,166 @@ describe('Phase 4 catalogue against production legacy D1 schema', () => {
     expect(own.movies.map((movie) => movie.id)).toEqual(['mv-b1']);
   });
 });
+
+describe('stream resolution API (legacy schema)', () => {
+  it('resolves M3U channel stream for owner through playlist ownership', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'legacy-stream-channel@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-a1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/c1' });
+  });
+
+  it('resolves M3U movie stream for owner through playlist ownership', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'legacy-stream-movie@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-a1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/m1' });
+  });
+
+  it('resolves M3U channel stream for owner via playlist ownership', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'legacy-stream-file@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-a1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/c1' });
+  });
+
+  it('rejects unauthenticated legacy stream requests', async () => {
+    const { harnessA } = setup();
+    for (const path of ['/api/channels/ch-a1/stream', '/api/movies/mv-a1/stream', '/api/episodes/ep-a1/stream']) {
+      expect((await harnessA.call('GET', path, undefined, { cookie: false })).status).toBe(401);
+    }
+  });
+
+  it('prevents cross-user legacy stream resolution', async () => {
+    const { harnessA, harnessB } = setup();
+    await register(harnessA, 'legacy-stream-owner@example.com');
+    await register(harnessB, 'legacy-stream-intruder@example.com');
+
+    for (const path of ['/api/channels/ch-a1/stream', '/api/movies/mv-a1/stream', '/api/episodes/ep-a1/stream']) {
+      expect((await harnessB.call('GET', path)).status).toBe(404);
+    }
+  });
+
+  it('keeps stream_url out of normal legacy detail responses', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'legacy-stream-nostream@example.com');
+
+    const channel = await harnessA.call('GET', '/api/channels/ch-a1');
+    expect((await channel.json()).channel).not.toHaveProperty('streamUrl');
+
+    const movie = await harnessA.call('GET', '/api/movies/mv-a1');
+    expect((await movie.json()).movie).not.toHaveProperty('streamUrl');
+
+    const episode = await harnessA.call('GET', '/api/episodes/ep-a1');
+    expect((await episode.json()).episode).not.toHaveProperty('streamUrl');
+  });
+
+  it('returns playable false for Xtream legacy channel without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO playlists (id, provider_id, name, imported_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('pl-x', 'prov-x', 'X import', 100, 110);
+    database
+      .prepare(
+        'INSERT INTO channels (id, playlist_id, category_id, name, stream_url) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('ch-x1', 'pl-x', null, 'Xtream Channel', 'xtream://channel/1');
+
+    await register(harnessA, 'legacy-stream-xtream@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns playable false for Xtream legacy movie without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO playlists (id, provider_id, name, imported_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('pl-x', 'prov-x', 'X import', 100, 110);
+    database
+      .prepare(
+        'INSERT INTO movies (id, playlist_id, category_id, name, stream_url) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('mv-x1', 'pl-x', null, 'Xtream Movie', 'xtream://movie/1');
+
+    await register(harnessA, 'legacy-stream-xtream-movie@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns playable false for Xtream legacy episode without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO playlists (id, provider_id, name, imported_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('pl-x', 'prov-x', 'X import', 100, 110);
+    database
+      .prepare(
+        'INSERT INTO categories (id, playlist_id, name, type, sort_order) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('cat-x', 'pl-x', 'X', 'series', 1);
+    database
+      .prepare(
+        'INSERT INTO series (id, playlist_id, category_id, name) VALUES (?, ?, ?, ?)',
+      )
+      .run('se-x1', 'pl-x', 'cat-x', 'Xtream Series');
+    database
+      .prepare(
+        'INSERT INTO episodes (id, series_id, season_number, episode_number, name, stream_url) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('ep-x1', 'se-x1', 1, 1, 'Xtream Episode', 'xtream://episode/1');
+
+    await register(harnessA, 'legacy-stream-xtream-ep@example.com');
+
+    const response = await harnessA.call('GET', '/api/episodes/ep-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns 404 for stream of nonexistent legacy content', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'legacy-stream-nonexistent@example.com');
+
+    expect((await harnessA.call('GET', '/api/channels/nonexistent/stream')).status).toBe(404);
+    expect((await harnessA.call('GET', '/api/movies/nonexistent/stream')).status).toBe(404);
+    expect((await harnessA.call('GET', '/api/episodes/nonexistent/stream')).status).toBe(404);
+  });
+});

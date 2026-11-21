@@ -228,3 +228,206 @@ describe('content browsing API', () => {
     expect(body.channels).toHaveLength(3);
   });
 });
+
+describe('stream resolution API (rich schema)', () => {
+  it('resolves M3U channel stream for owner', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'stream-channel@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-a1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/a1' });
+  });
+
+  it('resolves M3U movie stream for owner', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'stream-movie@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-a1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/m1' });
+  });
+
+  it('resolves M3U episode stream for owner', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO episodes (id, user_id, provider_id, series_id, external_id, title, stream_url, season_number, episode_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        'ep-stream-m3u',
+        USER_A,
+        'prov-a',
+        'se-a1',
+        'ext-e-stream',
+        'Stream Episode',
+        'https://stream.test/ep-stream',
+        1,
+        1,
+        100,
+        100,
+      );
+
+    await register(harnessA, 'stream-episode@example.com');
+
+    const response = await harnessA.call('GET', '/api/episodes/ep-stream-m3u/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/ep-stream' });
+  });
+
+  it('resolves m3u_file channel stream for owner', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'stream-file@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-a3/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: true, streamUrl: 'https://stream.test/a3' });
+  });
+
+  it('rejects unauthenticated stream requests', async () => {
+    const { harnessA } = setup();
+    for (const path of ['/api/channels/ch-a1/stream', '/api/movies/mv-a1/stream', '/api/episodes/ep-a1/stream']) {
+      expect((await harnessA.call('GET', path, undefined, { cookie: false })).status).toBe(401);
+    }
+  });
+
+  it('prevents cross-user stream resolution', async () => {
+    const { harnessA, harnessB } = setup();
+    await register(harnessA, 'stream-owner@example.com');
+    await register(harnessB, 'stream-intruder@example.com');
+
+    for (const path of ['/api/channels/ch-a1/stream', '/api/movies/mv-a1/stream', '/api/episodes/ep-a1/stream']) {
+      expect((await harnessB.call('GET', path)).status).toBe(404);
+    }
+  });
+
+  it('keeps stream_url out of normal catalogue/detail responses', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'stream-nostream@example.com');
+
+    const channelBody = await (await harnessA.call('GET', '/api/channels/ch-a1')).json();
+    expect(channelBody.channel).toMatchObject({ id: 'ch-a1' });
+    expect(channelBody.channel).not.toHaveProperty('streamUrl');
+
+    const movieBody = await (await harnessA.call('GET', '/api/movies/mv-a1')).json();
+    expect(movieBody.movie).not.toHaveProperty('streamUrl');
+
+    const episodeBody = await (await harnessA.call('GET', '/api/episodes/ep-a1')).json();
+    expect(episodeBody.episode).not.toHaveProperty('streamUrl');
+  });
+
+  it('returns playable false for Xtream channel without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-x1', USER_A, 'prov-x', null, 'ext-x1', 'Xtream Channel', 'xtream://channel/1', 100, 100);
+
+    await register(harnessA, 'stream-xtream@example.com');
+
+    const response = await harnessA.call('GET', '/api/channels/ch-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns playable false for Xtream movie without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO movies (id, user_id, provider_id, category_id, external_id, title, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('mv-x1', USER_A, 'prov-x', null, 'ext-x1', 'Xtream Movie', 'xtream://movie/1', 100, 100);
+
+    await register(harnessA, 'stream-xtream-movie@example.com');
+
+    const response = await harnessA.call('GET', '/api/movies/mv-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns playable false for Xtream episode without streamUrl', async () => {
+    const { database, harnessA } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO series (id, user_id, provider_id, category_id, external_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('se-x1', USER_A, 'prov-x', null, 'ext-x1', 'Xtream Series', 100, 100);
+    database
+      .prepare(
+        'INSERT INTO episodes (id, user_id, provider_id, series_id, external_id, title, stream_url, season_number, episode_number, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        'ep-x1',
+        USER_A,
+        'prov-x',
+        'se-x1',
+        'ext-x1',
+        'Xtream Episode',
+        'xtream://episode/1',
+        1,
+        1,
+        100,
+        100,
+      );
+
+    await register(harnessA, 'stream-xtream-ep@example.com');
+
+    const response = await harnessA.call('GET', '/api/episodes/ep-x1/stream');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.stream).toEqual({ playable: false, reason: 'xtream_web_playback_unsupported' });
+    expect(body.stream.streamUrl).toBeUndefined();
+  });
+
+  it('returns 404 for stream of nonexistent content', async () => {
+    const { harnessA } = setup();
+    await register(harnessA, 'stream-nonexistent@example.com');
+
+    expect((await harnessA.call('GET', '/api/channels/nonexistent/stream')).status).toBe(404);
+    expect((await harnessA.call('GET', '/api/movies/nonexistent/stream')).status).toBe(404);
+    expect((await harnessA.call('GET', '/api/episodes/nonexistent/stream')).status).toBe(404);
+  });
+
+  it('returns 404 when intruder requests another user Xtream stream', async () => {
+    const { database, harnessA, harnessB } = setup();
+    database
+      .prepare(
+        'INSERT INTO providers (id, user_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('prov-x', USER_A, 'Provider X', 'xtream', 0);
+    database
+      .prepare(
+        'INSERT INTO channels (id, user_id, provider_id, category_id, external_id, name, stream_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('ch-x1', USER_A, 'prov-x', null, 'ext-x1', 'Xtream Channel', 'xtream://channel/1', 100, 100);
+
+    await register(harnessA, 'stream-xtream-owner@example.com');
+    await register(harnessB, 'stream-xtream-intruder@example.com');
+
+    expect((await harnessB.call('GET', '/api/channels/ch-x1/stream')).status).toBe(404);
+  });
+});

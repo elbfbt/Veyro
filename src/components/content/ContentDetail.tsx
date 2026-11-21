@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, MonitorPlay, ShieldCheck } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Play, ShieldCheck } from 'lucide-react';
 import { contentMeta } from '../../lib/content';
+import type { ContentKind } from '../../types/content';
 import { SafeArtwork } from './SafeArtwork';
 
 interface ContentDetailProps {
@@ -14,6 +15,8 @@ interface ContentDetailProps {
   meta: Array<string | number | null | undefined>;
   backTo: string;
   backLabel: string;
+  kind?: ContentKind;
+  contentId?: string;
   children?: ReactNode;
 }
 
@@ -27,8 +30,16 @@ export function ContentDetail({
   meta,
   backTo,
   backLabel,
+  kind,
+  contentId,
   children,
 }: ContentDetailProps) {
+  const navigate = useNavigate();
+
+  const handlePlay = () => {
+    if (!kind || !contentId) return;
+    navigate(`/player/${kind}/${encodeURIComponent(contentId)}`);
+  };
   return (
     <div className="inner-page content-detail-page">
       <Link to={backTo} className="button button--quiet detail-back" data-spatial="detail-back">
@@ -47,14 +58,12 @@ export function ContentDetail({
             <button
               type="button"
               className="button button--primary"
-              disabled
-              aria-disabled="true"
-              title="Playback is added in Phase 5"
+              onClick={handlePlay}
               data-spatial="detail-play"
+              disabled={!kind || !contentId}
             >
-              <MonitorPlay size={18} /> Play · Phase 5
+              <Play size={18} /> Play
             </button>
-            <span className="badge badge--neutral">Browsing only</span>
           </div>
           <p className="content-detail__privacy">
             <ShieldCheck size={15} /> Streams are resolved only when playback ships. Veyro never relays video.
