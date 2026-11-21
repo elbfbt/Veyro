@@ -1,3 +1,4 @@
+import { toBase64Url } from '../auth/tokens';
 import type { CatalogCategory, ImportStats, M3uEntry, ProviderStatus, ProviderType, StoredProvider } from './types';
 
 // Minimal structural subset of D1 so this module also typechecks in the SPA config.
@@ -31,6 +32,20 @@ interface ProviderRow {
   updated_at: number;
 }
 
+/** Production D1 predates the richer provider/catalogue schema. */
+interface LegacyProviderRow {
+  id: string;
+  user_id: string;
+  name: string;
+  type: ProviderType;
+  server_url: string | null;
+  username_encrypted: string | null;
+  password_encrypted: string | null;
+  created_at: number | null;
+  updated_at: number | null;
+  is_default: number;
+}
+
 function parseMetadata(value: string | null): Record<string, unknown> {
   if (!value) return {};
   try {
@@ -61,7 +76,50 @@ function mapProvider(row: ProviderRow): StoredProvider {
   };
 }
 
+/**
+ * Legacy providers store the key id and combined credential ciphertext in the
+ * two available encrypted columns. Status/metadata have no column, so the
+ * stable API view uses the provider's last update time and empty metadata.
+ */
+function mapLegacyProvider(row: LegacyProviderRow): StoredProvider {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    type: row.type,
+    serverUrl: row.server_url,
+    credentialsEncrypted: row.password_encrypted,
+    credentialsKeyId: row.username_encrypted,
+    status: 'active',
+    isDefault: row.is_default === 1,
+    lastRefreshAt: row.updated_at ?? row.created_at ?? null,
+    metadata: {},
+    createdAt: row.created_at ?? 0,
+    updatedAt: row.updated_at ?? row.created_at ?? 0,
+  };
+}
+
 const CHUNK_SIZE = 400;
+type SchemaMode = 'rich' | 'legacy';
+
+// Cache schema detection per D1 binding; Worker builds a repository per request.
+const schemaCache = new WeakMap<object, Promise<SchemaMode>>();
+
+/**
+ * Legacy content tables have no external_id column. Stable IDs derived from
+ * provider + kind + source ID give us idempotent re-imports without adding
+ * columns or trusting client-supplied IDs.
+ */
+async function stableId(prefix: 'pl' | 'cat' | 'ch' | 'mv' | 'se' | 'ep', providerId: string, externalId: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`${prefix}:${providerId}:${externalId}`);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const suffix = toBase64Url(digest).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+  return `${prefix}_${suffix}`;
+}
+
+function legacyPlaylistId(providerId: string): Promise<string> {
+  return stableId('pl', providerId, 'imported');
+}
 
 export type CatalogKeyRow = { external_id: string; id: string; type?: 'channel' | 'movie' | 'series' };
 export type CatalogKeys = {
@@ -72,10 +130,39 @@ export type CatalogKeys = {
   categories: Map<string, string>;
 };
 
+const EMPTY_KEYS = (): CatalogKeys => ({
+  channels: new Map(),
+  movies: new Map(),
+  series: new Map(),
+  episodes: new Map(),
+  categories: new Map(),
+});
+
 export class D1ProviderRepository {
   constructor(private readonly db: ProviderDatabase) {}
 
+  private async schemaMode(): Promise<SchemaMode> {
+    const key = this.db as object;
+    let detected = schemaCache.get(key);
+    if (!detected) {
+      detected = (async () => {
+        const result = await this.db.prepare('PRAGMA table_info(providers)').all<{ name: string }>();
+        const columns = new Set((result.results ?? []).map((row) => row.name));
+        return columns.has('credentials_encrypted') ? 'rich' : 'legacy';
+      })();
+      schemaCache.set(key, detected);
+    }
+    return detected;
+  }
+
   async list(userId: string): Promise<StoredProvider[]> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const result = await this.db
+        .prepare('SELECT * FROM providers WHERE user_id = ? ORDER BY is_default DESC, created_at DESC')
+        .bind(userId)
+        .all<LegacyProviderRow>();
+      return (result.results ?? []).map(mapLegacyProvider);
+    }
     const result = await this.db
       .prepare('SELECT * FROM providers WHERE user_id = ? ORDER BY is_default DESC, created_at DESC')
       .bind(userId)
@@ -84,6 +171,13 @@ export class D1ProviderRepository {
   }
 
   async find(userId: string, id: string): Promise<StoredProvider | null> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const row = await this.db
+        .prepare('SELECT * FROM providers WHERE id = ? AND user_id = ?')
+        .bind(id, userId)
+        .first<LegacyProviderRow>();
+      return row ? mapLegacyProvider(row) : null;
+    }
     const row = await this.db
       .prepare('SELECT * FROM providers WHERE id = ? AND user_id = ?')
       .bind(id, userId)
@@ -92,6 +186,37 @@ export class D1ProviderRepository {
   }
 
   async create(provider: StoredProvider): Promise<void> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const insert = this.db
+        .prepare(
+          `INSERT INTO providers
+             (id, user_id, name, type, server_url, username_encrypted, password_encrypted,
+              created_at, updated_at, is_default)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          provider.id,
+          provider.userId,
+          provider.name,
+          provider.type,
+          provider.serverUrl,
+          provider.credentialsKeyId,
+          provider.credentialsEncrypted,
+          provider.createdAt,
+          provider.updatedAt,
+          provider.isDefault ? 1 : 0,
+        );
+      if (!provider.isDefault) {
+        await insert.run();
+        return;
+      }
+      await this.db.batch([
+        this.db.prepare('UPDATE providers SET is_default = 0, updated_at = ? WHERE user_id = ?').bind(provider.updatedAt, provider.userId),
+        insert,
+      ]);
+      return;
+    }
+
     const insert = this.db
       .prepare(
         `INSERT INTO providers
@@ -125,6 +250,31 @@ export class D1ProviderRepository {
   }
 
   async update(userId: string, id: string, patch: Partial<StoredProvider>, now: number): Promise<boolean> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const columns: string[] = [];
+      const values: BindValue[] = [];
+      const fields: Array<[string, BindValue | undefined]> = [
+        ['name', patch.name],
+        ['server_url', patch.serverUrl],
+        ['username_encrypted', patch.credentialsKeyId],
+        ['password_encrypted', patch.credentialsEncrypted],
+      ];
+      for (const [column, value] of fields) {
+        if (value !== undefined) {
+          columns.push(`${column} = ?`);
+          values.push(value);
+        }
+      }
+      if (columns.length === 0) return true;
+      columns.push('updated_at = ?');
+      values.push(now, id, userId);
+      const result = await this.db
+        .prepare(`UPDATE providers SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`)
+        .bind(...values)
+        .run();
+      return (result.meta.changes ?? 0) > 0;
+    }
+
     const columns: string[] = [];
     const values: BindValue[] = [];
     const fields: Array<[string, BindValue | undefined]> = [
@@ -153,6 +303,23 @@ export class D1ProviderRepository {
   }
 
   async remove(userId: string, id: string): Promise<boolean> {
+    if ((await this.schemaMode()) === 'legacy') {
+      if (!(await this.find(userId, id))) return false;
+      const playlistScope = 'playlist_id IN (SELECT id FROM playlists WHERE provider_id = ?)';
+      const statements = [
+        this.db.prepare(`DELETE FROM episodes WHERE series_id IN (SELECT id FROM series WHERE ${playlistScope})`).bind(id),
+        this.db.prepare(`DELETE FROM series WHERE ${playlistScope}`).bind(id),
+        this.db.prepare(`DELETE FROM channels WHERE ${playlistScope}`).bind(id),
+        this.db.prepare(`DELETE FROM movies WHERE ${playlistScope}`).bind(id),
+        this.db.prepare(`DELETE FROM categories WHERE ${playlistScope}`).bind(id),
+        this.db.prepare('DELETE FROM playlists WHERE provider_id = ?').bind(id),
+        this.db.prepare('DELETE FROM providers WHERE id = ? AND user_id = ?').bind(id, userId),
+      ];
+      const results = await this.db.batch(statements);
+      const removed = results[results.length - 1] as { meta?: { changes?: number } } | undefined;
+      return (removed?.meta?.changes ?? 0) > 0;
+    }
+
     const result = await this.db
       .prepare('DELETE FROM providers WHERE id = ? AND user_id = ?')
       .bind(id, userId)
@@ -171,6 +338,10 @@ export class D1ProviderRepository {
   }
 
   async loadCatalogKeys(userId: string, providerId: string): Promise<CatalogKeys> {
+    if ((await this.schemaMode()) === 'legacy') {
+      // Legacy tables have no external_id; saveCatalog derives stable IDs itself.
+      return EMPTY_KEYS();
+    }
     const [channels, movies, series, episodes, categories] = await Promise.all([
       Promise.resolve(this.db.prepare('SELECT external_id, id FROM channels WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>()),
       this.db.prepare('SELECT external_id, id FROM movies WHERE user_id = ? AND provider_id = ?').bind(userId, providerId).all<CatalogKeyRow>(),
@@ -197,6 +368,20 @@ export class D1ProviderRepository {
     stats: ImportStats,
     now: number,
   ): Promise<string> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const playlistId = await legacyPlaylistId(providerId);
+      await this.db.batch([
+        this.db
+          .prepare(
+            `INSERT OR REPLACE INTO playlists (id, provider_id, name, source_url, imported_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(playlistId, providerId, 'Imported playlist', null, now, now),
+        this.db.prepare('UPDATE providers SET updated_at = ? WHERE id = ? AND user_id = ?').bind(now, providerId, userId),
+      ]);
+      return playlistId;
+    }
+
     const playlistId = crypto.randomUUID();
     const metadata = JSON.stringify({ lastImport: stats, checksum });
     await this.db.batch([
@@ -219,6 +404,10 @@ export class D1ProviderRepository {
     now: number,
     categories: CatalogCategory[] = [],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }> {
+    if ((await this.schemaMode()) === 'legacy') {
+      return this.saveLegacyCatalog(providerId, entries, now, categories);
+    }
+
     const statements: ProviderStatement[] = [];
     let added = 0;
     let updated = 0;
@@ -324,6 +513,131 @@ export class D1ProviderRepository {
           );
         }
         added += 1;
+      }
+    }
+
+    for (let index = 0; index < statements.length; index += CHUNK_SIZE) {
+      await this.db.batch(statements.slice(index, index + CHUNK_SIZE));
+    }
+    return { added, updated, categoriesAdded };
+  }
+
+  /** Writes against the exact legacy production tables, with idempotent IDs. */
+  private async saveLegacyCatalog(
+    providerId: string,
+    entries: M3uEntry[],
+    now: number,
+    categories: CatalogCategory[],
+  ): Promise<{ added: number; updated: number; categoriesAdded: number }> {
+    const playlistId = await legacyPlaylistId(providerId);
+    await this.db
+      .prepare(
+        `INSERT OR REPLACE INTO playlists (id, provider_id, name, source_url, imported_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(playlistId, providerId, 'Imported playlist', null, now, now)
+      .run();
+
+    const existingIds = new Map<string, Set<string>>();
+    for (const table of ['channels', 'movies', 'series', 'categories'] as const) {
+      const result = await this.db
+        .prepare(`SELECT id FROM ${table} WHERE playlist_id = ?`)
+        .bind(playlistId)
+        .all<{ id: string }>();
+      existingIds.set(table, new Set((result.results ?? []).map((row) => row.id)));
+    }
+    // M3U episodes may have no series link; include those stable IDs in the count.
+    const episodeRows = await this.db
+      .prepare('SELECT e.id FROM episodes e LEFT JOIN series s ON s.id = e.series_id WHERE s.playlist_id = ? OR e.series_id IS NULL')
+      .bind(playlistId)
+      .all<{ id: string }>();
+    existingIds.set('episodes', new Set((episodeRows.results ?? []).map((row) => row.id)));
+
+    const statements: ProviderStatement[] = [];
+    let added = 0;
+    let updated = 0;
+    let categoriesAdded = 0;
+    const categoryIds = new Map<string, string>();
+    const seriesIds = new Map<string, string>();
+
+    const countChange = (table: 'channels' | 'movies' | 'series' | 'episodes' | 'categories', id: string) => {
+      if (existingIds.get(table)?.has(id)) updated += 1;
+      else {
+        added += 1;
+        existingIds.get(table)?.add(id);
+      }
+    };
+
+    const ensureCategory = async (externalId: string, name: string, type: 'channel' | 'movie' | 'series') => {
+      const key = `${type}:${externalId}`;
+      const existing = categoryIds.get(key);
+      if (existing) return existing;
+      const id = await stableId('cat', providerId, key);
+      categoryIds.set(key, id);
+      statements.push(
+        this.db
+          .prepare('INSERT OR REPLACE INTO categories (id, playlist_id, name, type, sort_order) VALUES (?, ?, ?, ?, ?)')
+          .bind(id, playlistId, name, type, categoryIds.size),
+      );
+      if (existingIds.get('categories')?.has(id)) categoriesAdded += 0;
+      else {
+        categoriesAdded += 1;
+        existingIds.get('categories')?.add(id);
+      }
+      return id;
+    };
+
+    for (const category of categories) {
+      await ensureCategory(category.externalId, category.name, category.type);
+    }
+
+    for (const entry of entries) {
+      let categoryId: string | null = null;
+      const type = entry.categoryType ?? (entry.kind === 'episode' ? 'series' : entry.kind);
+      if (entry.categoryExternalId) {
+        categoryId = await ensureCategory(entry.categoryExternalId, entry.categoryName ?? entry.name, type);
+      } else if (entry.groupTitle) {
+        const externalId = `group:${entry.groupTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'uncategorized'}`;
+        categoryId = await ensureCategory(externalId, entry.groupTitle, type);
+      }
+
+      if (entry.kind === 'series') {
+        const id = await stableId('se', providerId, entry.externalId);
+        seriesIds.set(entry.externalId, id);
+        statements.push(
+          this.db
+            .prepare('INSERT OR REPLACE INTO series (id, playlist_id, category_id, name, logo_url, year, description) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .bind(id, playlistId, categoryId, entry.name, entry.posterUrl ?? entry.tvgLogo ?? null, null, entry.description ?? null),
+        );
+        countChange('series', id);
+        continue;
+      }
+
+      if (entry.kind === 'channel') {
+        const id = await stableId('ch', providerId, entry.externalId);
+        statements.push(
+          this.db
+            .prepare('INSERT OR REPLACE INTO channels (id, playlist_id, category_id, name, stream_url, logo_url, tvg_id, tvg_name, is_live) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(id, playlistId, categoryId, entry.name, entry.streamUrl, entry.tvgLogo ?? null, entry.tvgId ?? null, entry.tvgName ?? null, 1),
+        );
+        countChange('channels', id);
+      } else if (entry.kind === 'movie') {
+        const id = await stableId('mv', providerId, entry.externalId);
+        statements.push(
+          this.db
+            .prepare('INSERT OR REPLACE INTO movies (id, playlist_id, category_id, name, stream_url, logo_url, year, duration, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(id, playlistId, categoryId, entry.name, entry.streamUrl, entry.posterUrl ?? entry.tvgLogo ?? null, null, null, entry.description ?? null),
+        );
+        countChange('movies', id);
+      } else {
+        const id = await stableId('ep', providerId, entry.externalId);
+        const seriesId = entry.seriesExternalId ? seriesIds.get(entry.seriesExternalId) ?? await stableId('se', providerId, entry.seriesExternalId) : null;
+        statements.push(
+          this.db
+            .prepare('INSERT OR REPLACE INTO episodes (id, series_id, season_number, episode_number, name, stream_url, duration, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(id, seriesId, entry.seasonNumber ?? null, entry.episodeNumber ?? null, entry.name, entry.streamUrl, null, entry.description ?? null),
+        );
+        countChange('episodes', id);
       }
     }
 
