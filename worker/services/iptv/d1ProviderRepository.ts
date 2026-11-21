@@ -102,6 +102,90 @@ function mapLegacyProvider(row: LegacyProviderRow): StoredProvider {
 const CHUNK_SIZE = 400;
 type SchemaMode = 'rich' | 'legacy';
 
+/**
+ * Conservative upserts. SQLite's INSERT OR REPLACE deletes the conflicting row
+ * first, which violates (or cascades through) D1 foreign keys once catalogue
+ * children exist. ON CONFLICT DO UPDATE keeps the original row identity.
+ */
+const LEGACY_PLAYLIST_UPSERT = `
+  INSERT INTO playlists (id, provider_id, name, source_url, imported_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    provider_id = excluded.provider_id,
+    name = excluded.name,
+    source_url = excluded.source_url,
+    imported_at = excluded.imported_at,
+    updated_at = excluded.updated_at
+`;
+const LEGACY_CATEGORY_UPSERT = `
+  INSERT INTO categories (id, playlist_id, name, type, sort_order) VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    playlist_id = excluded.playlist_id,
+    name = excluded.name,
+    type = excluded.type,
+    sort_order = excluded.sort_order
+`;
+const LEGACY_SERIES_UPSERT = `
+  INSERT INTO series (id, playlist_id, category_id, name, logo_url, year, description) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    playlist_id = excluded.playlist_id,
+    category_id = excluded.category_id,
+    name = excluded.name,
+    logo_url = excluded.logo_url,
+    year = excluded.year,
+    description = excluded.description
+`;
+const LEGACY_CHANNEL_UPSERT = `
+  INSERT INTO channels (id, playlist_id, category_id, name, stream_url, logo_url, tvg_id, tvg_name, is_live)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    playlist_id = excluded.playlist_id,
+    category_id = excluded.category_id,
+    name = excluded.name,
+    stream_url = excluded.stream_url,
+    logo_url = excluded.logo_url,
+    tvg_id = excluded.tvg_id,
+    tvg_name = excluded.tvg_name,
+    is_live = excluded.is_live
+`;
+const LEGACY_MOVIE_UPSERT = `
+  INSERT INTO movies (id, playlist_id, category_id, name, stream_url, logo_url, year, duration, description)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    playlist_id = excluded.playlist_id,
+    category_id = excluded.category_id,
+    name = excluded.name,
+    stream_url = excluded.stream_url,
+    logo_url = excluded.logo_url,
+    year = excluded.year,
+    duration = excluded.duration,
+    description = excluded.description
+`;
+const LEGACY_EPISODE_UPSERT = `
+  INSERT INTO episodes (id, series_id, season_number, episode_number, name, stream_url, duration, description)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    series_id = excluded.series_id,
+    season_number = excluded.season_number,
+    episode_number = excluded.episode_number,
+    name = excluded.name,
+    stream_url = excluded.stream_url,
+    duration = excluded.duration,
+    description = excluded.description
+`;
+
+export interface ProviderRepositoryDiagnostic {
+  /** Stable operation label; never contains SQL parameters or user content. */
+  operation: string;
+  /** Error message only. Callers decide whether to log it in a safe context. */
+  message: string;
+}
+
+export interface D1ProviderRepositoryOptions {
+  /** Test/debug hook. Production code does not pass this, so nothing is logged. */
+  onDiagnostic?: (diagnostic: ProviderRepositoryDiagnostic) => void;
+}
+
 // Cache schema detection per D1 binding; Worker builds a repository per request.
 const schemaCache = new WeakMap<object, Promise<SchemaMode>>();
 
@@ -139,7 +223,35 @@ const EMPTY_KEYS = (): CatalogKeys => ({
 });
 
 export class D1ProviderRepository {
-  constructor(private readonly db: ProviderDatabase) {}
+  constructor(
+    private readonly db: ProviderDatabase,
+    private readonly options: D1ProviderRepositoryOptions = {},
+  ) {}
+
+  private reportDiagnostic(operation: string, error: unknown): void {
+    this.options.onDiagnostic?.({
+      operation,
+      message: error instanceof Error ? error.message : 'Unknown database error',
+    });
+  }
+
+  private async monitoredRun(operation: string, statement: ProviderStatement) {
+    try {
+      return await statement.run();
+    } catch (error) {
+      this.reportDiagnostic(operation, error);
+      throw error;
+    }
+  }
+
+  private async monitoredBatch(operation: string, statements: ProviderStatement[]): Promise<unknown[]> {
+    try {
+      return await this.db.batch(statements);
+    } catch (error) {
+      this.reportDiagnostic(operation, error);
+      throw error;
+    }
+  }
 
   private async schemaMode(): Promise<SchemaMode> {
     const key = this.db as object;
@@ -207,10 +319,10 @@ export class D1ProviderRepository {
           provider.isDefault ? 1 : 0,
         );
       if (!provider.isDefault) {
-        await insert.run();
+        await this.monitoredRun('provider.create', insert);
         return;
       }
-      await this.db.batch([
+      await this.monitoredBatch('provider.create-default', [
         this.db.prepare('UPDATE providers SET is_default = 0, updated_at = ? WHERE user_id = ?').bind(provider.updatedAt, provider.userId),
         insert,
       ]);
@@ -240,10 +352,10 @@ export class D1ProviderRepository {
         provider.updatedAt,
       );
     if (!provider.isDefault) {
-      await insert.run();
+      await this.monitoredRun('provider.create', insert);
       return;
     }
-    await this.db.batch([
+    await this.monitoredBatch('provider.create-default', [
       this.db.prepare('UPDATE providers SET is_default = 0, updated_at = ? WHERE user_id = ?').bind(provider.updatedAt, provider.userId),
       insert,
     ]);
@@ -268,10 +380,10 @@ export class D1ProviderRepository {
       if (columns.length === 0) return true;
       columns.push('updated_at = ?');
       values.push(now, id, userId);
-      const result = await this.db
-        .prepare(`UPDATE providers SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`)
-        .bind(...values)
-        .run();
+      const result = await this.monitoredRun(
+        'provider.update',
+        this.db.prepare(`UPDATE providers SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`).bind(...values),
+      );
       return (result.meta.changes ?? 0) > 0;
     }
 
@@ -295,10 +407,10 @@ export class D1ProviderRepository {
     if (columns.length === 0) return true;
     columns.push('updated_at = ?');
     values.push(now, id, userId);
-    const result = await this.db
-      .prepare(`UPDATE providers SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`)
-      .bind(...values)
-      .run();
+    const result = await this.monitoredRun(
+      'provider.update',
+      this.db.prepare(`UPDATE providers SET ${columns.join(', ')} WHERE id = ? AND user_id = ?`).bind(...values),
+    );
     return (result.meta.changes ?? 0) > 0;
   }
 
@@ -315,22 +427,22 @@ export class D1ProviderRepository {
         this.db.prepare('DELETE FROM playlists WHERE provider_id = ?').bind(id),
         this.db.prepare('DELETE FROM providers WHERE id = ? AND user_id = ?').bind(id, userId),
       ];
-      const results = await this.db.batch(statements);
+      const results = await this.monitoredBatch('provider.remove', statements);
       const removed = results[results.length - 1] as { meta?: { changes?: number } } | undefined;
       return (removed?.meta?.changes ?? 0) > 0;
     }
 
-    const result = await this.db
-      .prepare('DELETE FROM providers WHERE id = ? AND user_id = ?')
-      .bind(id, userId)
-      .run();
+    const result = await this.monitoredRun(
+      'provider.remove',
+      this.db.prepare('DELETE FROM providers WHERE id = ? AND user_id = ?').bind(id, userId),
+    );
     return (result.meta.changes ?? 0) > 0;
   }
 
   async setDefault(userId: string, id: string, now: number): Promise<boolean> {
     const provider = await this.find(userId, id);
     if (!provider) return false;
-    await this.db.batch([
+    await this.monitoredBatch('provider.set-default', [
       this.db.prepare('UPDATE providers SET is_default = 0, updated_at = ? WHERE user_id = ?').bind(now, userId),
       this.db.prepare('UPDATE providers SET is_default = 1, updated_at = ? WHERE id = ? AND user_id = ?').bind(now, id, userId),
     ]);
@@ -370,13 +482,8 @@ export class D1ProviderRepository {
   ): Promise<string> {
     if ((await this.schemaMode()) === 'legacy') {
       const playlistId = await legacyPlaylistId(providerId);
-      await this.db.batch([
-        this.db
-          .prepare(
-            `INSERT OR REPLACE INTO playlists (id, provider_id, name, source_url, imported_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(playlistId, providerId, 'Imported playlist', null, now, now),
+      await this.monitoredBatch('import.playlist-upsert', [
+        this.db.prepare(LEGACY_PLAYLIST_UPSERT).bind(playlistId, providerId, 'Imported playlist', null, now, now),
         this.db.prepare('UPDATE providers SET updated_at = ? WHERE id = ? AND user_id = ?').bind(now, providerId, userId),
       ]);
       return playlistId;
@@ -384,7 +491,7 @@ export class D1ProviderRepository {
 
     const playlistId = crypto.randomUUID();
     const metadata = JSON.stringify({ lastImport: stats, checksum });
-    await this.db.batch([
+    await this.monitoredBatch('import.playlist-insert', [
       this.db
         .prepare('INSERT INTO playlists (id, user_id, provider_id, item_count, checksum, status, last_imported_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(playlistId, userId, providerId, stats.totalEntries, checksum, 'ready', now, now),
@@ -517,7 +624,7 @@ export class D1ProviderRepository {
     }
 
     for (let index = 0; index < statements.length; index += CHUNK_SIZE) {
-      await this.db.batch(statements.slice(index, index + CHUNK_SIZE));
+      await this.monitoredBatch('catalog.upsert-chunk', statements.slice(index, index + CHUNK_SIZE));
     }
     return { added, updated, categoriesAdded };
   }
@@ -530,13 +637,10 @@ export class D1ProviderRepository {
     categories: CatalogCategory[],
   ): Promise<{ added: number; updated: number; categoriesAdded: number }> {
     const playlistId = await legacyPlaylistId(providerId);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO playlists (id, provider_id, name, source_url, imported_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(playlistId, providerId, 'Imported playlist', null, now, now)
-      .run();
+    await this.monitoredRun(
+      'catalog.playlist-upsert',
+      this.db.prepare(LEGACY_PLAYLIST_UPSERT).bind(playlistId, providerId, 'Imported playlist', null, now, now),
+    );
 
     const existingIds = new Map<string, Set<string>>();
     for (const table of ['channels', 'movies', 'series', 'categories'] as const) {
@@ -575,9 +679,7 @@ export class D1ProviderRepository {
       const id = await stableId('cat', providerId, key);
       categoryIds.set(key, id);
       statements.push(
-        this.db
-          .prepare('INSERT OR REPLACE INTO categories (id, playlist_id, name, type, sort_order) VALUES (?, ?, ?, ?, ?)')
-          .bind(id, playlistId, name, type, categoryIds.size),
+        this.db.prepare(LEGACY_CATEGORY_UPSERT).bind(id, playlistId, name, type, categoryIds.size),
       );
       if (existingIds.get('categories')?.has(id)) categoriesAdded += 0;
       else {
@@ -606,7 +708,7 @@ export class D1ProviderRepository {
         seriesIds.set(entry.externalId, id);
         statements.push(
           this.db
-            .prepare('INSERT OR REPLACE INTO series (id, playlist_id, category_id, name, logo_url, year, description) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .prepare(LEGACY_SERIES_UPSERT)
             .bind(id, playlistId, categoryId, entry.name, entry.posterUrl ?? entry.tvgLogo ?? null, null, entry.description ?? null),
         );
         countChange('series', id);
@@ -617,7 +719,7 @@ export class D1ProviderRepository {
         const id = await stableId('ch', providerId, entry.externalId);
         statements.push(
           this.db
-            .prepare('INSERT OR REPLACE INTO channels (id, playlist_id, category_id, name, stream_url, logo_url, tvg_id, tvg_name, is_live) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .prepare(LEGACY_CHANNEL_UPSERT)
             .bind(id, playlistId, categoryId, entry.name, entry.streamUrl, entry.tvgLogo ?? null, entry.tvgId ?? null, entry.tvgName ?? null, 1),
         );
         countChange('channels', id);
@@ -625,7 +727,7 @@ export class D1ProviderRepository {
         const id = await stableId('mv', providerId, entry.externalId);
         statements.push(
           this.db
-            .prepare('INSERT OR REPLACE INTO movies (id, playlist_id, category_id, name, stream_url, logo_url, year, duration, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .prepare(LEGACY_MOVIE_UPSERT)
             .bind(id, playlistId, categoryId, entry.name, entry.streamUrl, entry.posterUrl ?? entry.tvgLogo ?? null, null, null, entry.description ?? null),
         );
         countChange('movies', id);
@@ -634,7 +736,7 @@ export class D1ProviderRepository {
         const seriesId = entry.seriesExternalId ? seriesIds.get(entry.seriesExternalId) ?? await stableId('se', providerId, entry.seriesExternalId) : null;
         statements.push(
           this.db
-            .prepare('INSERT OR REPLACE INTO episodes (id, series_id, season_number, episode_number, name, stream_url, duration, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .prepare(LEGACY_EPISODE_UPSERT)
             .bind(id, seriesId, entry.seasonNumber ?? null, entry.episodeNumber ?? null, entry.name, entry.streamUrl, null, entry.description ?? null),
         );
         countChange('episodes', id);
@@ -642,7 +744,7 @@ export class D1ProviderRepository {
     }
 
     for (let index = 0; index < statements.length; index += CHUNK_SIZE) {
-      await this.db.batch(statements.slice(index, index + CHUNK_SIZE));
+      await this.monitoredBatch('catalog.legacy-upsert-chunk', statements.slice(index, index + CHUNK_SIZE));
     }
     return { added, updated, categoriesAdded };
   }

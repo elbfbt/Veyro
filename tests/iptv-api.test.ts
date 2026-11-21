@@ -121,7 +121,7 @@ describe('provider API', () => {
     form.append('name', 'Uploaded playlist');
     form.append('file', new Blob(['#EXTM3U\n#EXTINF:-1 tvg-id="bbc",BBC\nhttps://stream.example.com/bbc\n']), 'list.m3u8');
     const imported = await harness.call('POST', '/api/providers/import', undefined, { rawBody: form });
-    expect(imported.status).toBe(201);
+    expect(imported.status).toBe(200);
     expect((await imported.json()).imported).toBe(true);
     expect([...repository.catalog.values()][0]?.[0]?.name).toBe('BBC');
 

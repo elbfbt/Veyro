@@ -22,7 +22,7 @@ export interface SqliteDatabase {
 class SQLiteStatement {
   constructor(
     private readonly db: SqliteDatabase,
-    private readonly sql: string,
+    readonly sql: string,
     private readonly params: BindValue[] = [],
   ) {}
 
@@ -44,9 +44,11 @@ class SQLiteStatement {
 }
 
 /** D1-compatible adapter for provider repository tests (includes batch/run). */
-export function legacyProviderDatabaseAdapter(db: SqliteDatabase) {
+export function legacyProviderDatabaseAdapter(db: SqliteDatabase, onSql?: (sql: string) => void) {
   return {
     prepare(sql: string) {
+      // SQL text only; bound values (credentials, uploads, names) are never exposed.
+      onSql?.(sql);
       return new SQLiteStatement(db, sql);
     },
     async batch(statements: Array<{ run(): { changes: number | bigint } }>) {
@@ -141,6 +143,64 @@ export function makeLegacyContentDatabase(userIds: string[]) {
     db.prepare('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(
       id,
       `legacy-${index}@example.com`,
+      'hash',
+    );
+  });
+  return db;
+}
+
+/** Exact production legacy columns plus the D1 foreign keys described by the user. */
+export function makeLegacyContentDatabaseWithForeignKeys(
+  userIds: string[],
+  childDeleteAction: '' | ' ON DELETE RESTRICT' | ' ON DELETE CASCADE' = '',
+) {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL);
+    CREATE TABLE providers (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
+      server_url TEXT, username_encrypted TEXT, password_encrypted TEXT,
+      created_at INTEGER, updated_at INTEGER, is_default INTEGER
+    );
+    CREATE TABLE playlists (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      name TEXT, source_url TEXT, imported_at INTEGER, updated_at INTEGER
+    );
+    CREATE TABLE categories (
+      id TEXT PRIMARY KEY,
+      playlist_id TEXT REFERENCES playlists(id)${childDeleteAction},
+      name TEXT NOT NULL, type TEXT NOT NULL, sort_order INTEGER
+    );
+    CREATE TABLE movies (
+      id TEXT PRIMARY KEY,
+      playlist_id TEXT REFERENCES playlists(id)${childDeleteAction},
+      category_id TEXT, name TEXT NOT NULL, stream_url TEXT, logo_url TEXT,
+      year INTEGER, duration INTEGER, description TEXT
+    );
+    CREATE TABLE channels (
+      id TEXT PRIMARY KEY,
+      playlist_id TEXT REFERENCES playlists(id)${childDeleteAction},
+      category_id TEXT, name TEXT NOT NULL, stream_url TEXT, logo_url TEXT,
+      tvg_id TEXT, tvg_name TEXT, is_live INTEGER
+    );
+    CREATE TABLE series (
+      id TEXT PRIMARY KEY,
+      playlist_id TEXT REFERENCES playlists(id)${childDeleteAction},
+      category_id TEXT, name TEXT NOT NULL, logo_url TEXT, year INTEGER, description TEXT
+    );
+    CREATE TABLE episodes (
+      id TEXT PRIMARY KEY,
+      series_id TEXT REFERENCES series(id) ON DELETE CASCADE,
+      season_number INTEGER, episode_number INTEGER, name TEXT NOT NULL,
+      stream_url TEXT, duration INTEGER, description TEXT
+    );
+  `);
+  userIds.forEach((id, index) => {
+    db.prepare('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(
+      id,
+      `legacy-fk-${index}@example.com`,
       'hash',
     );
   });
