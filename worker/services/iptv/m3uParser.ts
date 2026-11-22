@@ -1,8 +1,20 @@
 import { classifyParsedEntry } from './classifier';
 import type { M3uEntry, ParsedPlaylist } from './types';
 
-export const DEFAULT_MAX_PLAYLIST_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_MAX_PLAYLIST_ENTRIES = 20_000;
+/**
+ * Server-side import ceilings for one playlist.
+ *
+ * These are deliberately the same policy as the chunked file import
+ * (`MAX_TOTAL_ENTRIES`), so the same playlist imports identically whether the
+ * user uploads it or supplies a URL. They are hard limits: exceeding either one
+ * fails the import loudly instead of silently importing a partial playlist.
+ *
+ * 24 MiB comfortably holds a 100,000-entry playlist (typical entries are
+ * ~150-250 bytes) while keeping Worker memory bounded: the entries and the D1
+ * statements are streamed in batches rather than buffered in full.
+ */
+export const DEFAULT_MAX_PLAYLIST_BYTES = 24 * 1024 * 1024;
+export const DEFAULT_MAX_PLAYLIST_ENTRIES = 100_000;
 
 export class PlaylistLimitError extends Error {
   constructor(message: string) {
