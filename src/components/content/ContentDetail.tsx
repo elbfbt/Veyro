@@ -66,7 +66,7 @@ export function ContentDetail({
             </button>
           </div>
           <p className="content-detail__privacy">
-            <ShieldCheck size={15} /> Streams are resolved only when playback ships. Veyro never relays video.
+            <ShieldCheck size={15} /> Plays straight from your provider. Veyro never relays video.
           </p>
         </div>
       </section>

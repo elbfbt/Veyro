@@ -1,4 +1,11 @@
 @layer tokens {
+  /*
+   * Single source of design decisions: colour, spacing, radii, elevation,
+   * motion and layering. Component sheets must not invent one-off values.
+   *
+   * Colour is authored in hex/rgba first (universal fallback) and upgraded to
+   * OKLCH in the @supports block near the bottom for capable browsers.
+   */
   :root {
     color-scheme: dark;
 
@@ -7,42 +14,147 @@
     --brand-accent-light: #a18cff;
     --brand-accent-deep: #4b2fd6;
 
+    /* Semantic accent: primary actions and active states only. */
+    --accent: var(--brand-accent);
+    --accent-soft: rgba(124, 92, 255, 0.16);
+    --accent-line: rgba(161, 140, 255, 0.4);
+    --accent-glow: rgba(124, 92, 255, 0.32);
+    --ambient-accent: rgba(124, 92, 255, 0.14);
+    --ambient-deep: rgba(75, 47, 214, 0.08);
+    --on-accent: #ffffff;
+
+    /* Layered dark surfaces (lighten instead of heavy drop shadows). */
     --bg: #08080c;
     --bg-deep: #050508;
     --bg-raised: #0e0e15;
+    --bg-overlay: #111119;
     --surface: rgba(255, 255, 255, 0.045);
     --surface-strong: rgba(255, 255, 255, 0.085);
     --surface-hover: rgba(255, 255, 255, 0.12);
+    --scrim: rgba(3, 3, 6, 0.76);
+    /* Overlays that sit on top of artwork. */
+    --scrim-card: rgba(4, 4, 8, 0.94);
+    --scrim-control: rgba(12, 12, 18, 0.72);
+    --on-media: rgba(255, 255, 255, 0.9);
+    --on-media-muted: rgba(255, 255, 255, 0.74);
+    --live-tint: rgba(255, 77, 106, 0.18);
+    --live-line: rgba(255, 77, 106, 0.45);
+
+    /* AA-contrast text ramp on our dark surfaces. */
+    --text: #f6f6fa;
+    --text-muted: #b4b4c2;
+    --text-subtle: #8f8f9e;
+    --danger: #ff6b83;
+    --success: #5eea92;
+
+    /* Alpha borders read as hairlines on every surface. */
     --border: rgba(255, 255, 255, 0.09);
     --border-strong: rgba(255, 255, 255, 0.16);
-    --text: #f6f6fa;
-    --text-muted: #a3a3b2;
-    --text-subtle: #747483;
-    --danger: #ff4d6a;
-    --success: #4ade80;
+
+    /* Spacing scale — use these instead of ad-hoc margins. */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --space-8: 64px;
+    --space-row: clamp(20px, 3vw, 32px);
+
+    /* Concentric radii: inner = outer − padding. */
+    --radius-xs: 7px;
+    --radius-sm: 10px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --radius-xl: 28px;
+    --radius-pill: 999px;
 
     --sidebar-expanded: 252px;
     --sidebar-collapsed: 86px;
     --topbar-height: 76px;
     --page-x: clamp(20px, 4vw, 64px);
-    --radius-sm: 10px;
-    --radius-md: 16px;
-    --radius-lg: 22px;
-    --radius-pill: 999px;
 
-    --shadow-card: 0 18px 50px rgba(0, 0, 0, 0.42);
-    --shadow-focus: 0 0 0 3px var(--brand-accent-light);
+    /* Elevation: subtle, layered, low-opacity. */
+    --shadow-card: 0 14px 40px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 22px 60px rgba(0, 0, 0, 0.55);
+    --focus-ring: 2px solid var(--brand-accent-light);
+    --shadow-focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand-accent-light);
+
+    /* Typography. */
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-display: var(--font-sans);
+    --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+    --measure: 65ch;
+    --measure-narrow: 52ch;
+
+    /* Motion: ease-out entrances, ease-in-out moves, exits ~20% shorter. */
+    --dur-fast: 120ms;
+    --dur-base: 180ms;
+    --dur-slow: 240ms;
+    --dur-exit: 150ms;
     --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --stagger: 30ms;
+    --stagger-max: 10;
+
+    /* Layering. */
+    --z-topbar: 30;
+    --z-nav: 34;
+    --z-scrim: 35;
+    --z-drawer: 40;
+    --z-modal: 100;
+    --z-toast: 120;
+    --z-skip: 200;
+
+    /* Touch/pointer ergonomics. */
+    --hit-size: 44px;
+    --hit-slop: 8px;
+
+    /* Mobile / player safe areas. */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
   }
 
   :root[data-density='compact'] {
     --topbar-height: 64px;
     --page-x: clamp(16px, 3vw, 44px);
+    --space-row: clamp(16px, 2.4vw, 26px);
   }
 
   :root[data-tv='true'] {
     --topbar-height: 96px;
     --page-x: 64px;
     font-size: 18px;
+  }
+
+  /* OKLCH upgrade: same intent, wider gamut and smoother gradients. */
+  @supports (color: oklch(50% 0.1 285)) {
+    :root {
+      --bg: oklch(0.155 0.012 285);
+      --bg-deep: oklch(0.13 0.01 285);
+      --bg-raised: oklch(0.2 0.016 285);
+      --bg-overlay: oklch(0.22 0.018 285);
+      --surface: oklch(100% 0 0 / 0.045);
+      --surface-strong: oklch(100% 0 0 / 0.085);
+      --surface-hover: oklch(100% 0 0 / 0.12);
+      --scrim: oklch(12% 0.02 285 / 0.76);
+      --scrim-card: oklch(13% 0.015 285 / 0.94);
+      --scrim-control: oklch(17% 0.015 285 / 0.72);
+      --accent-soft: oklch(58% 0.24 285 / 0.16);
+      --accent-line: oklch(72% 0.16 288 / 0.4);
+      --accent-glow: oklch(58% 0.24 285 / 0.32);
+      --ambient-accent: oklch(58% 0.24 285 / 0.14);
+      --ambient-deep: oklch(44% 0.24 285 / 0.08);
+      --text: oklch(0.975 0.006 285);
+      --text-muted: oklch(0.72 0.018 285);
+      --text-subtle: oklch(0.66 0.018 285);
+      --danger: oklch(0.72 0.18 15);
+      --success: oklch(0.83 0.17 155);
+      --border: oklch(100% 0 0 / 0.09);
+      --border-strong: oklch(100% 0 0 / 0.16);
+    }
   }
 }

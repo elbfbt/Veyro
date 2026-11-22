@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { ContentCard } from '../../components/content/ContentCard';
 import { CatalogEmpty, CatalogError, CatalogSkeleton } from '../../components/content/CatalogStates';
 import { errorMessage } from '../../hooks/useCatalog';
@@ -14,6 +14,7 @@ export function HomePage() {
   const [channels, setChannels] = useState<ChannelItem[]>([]);
   const [movies, setMovies] = useState<MovieItem[]>([]);
   const [series, setSeries] = useState<SeriesItem[]>([]);
+  const [totals, setTotals] = useState({ channels: 0, movies: 0, series: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -39,6 +40,11 @@ export function HomePage() {
         setChannels(channelResult.channels);
         setMovies(movieResult.movies);
         setSeries(seriesResult.series);
+        setTotals({
+          channels: channelResult.pagination.total,
+          movies: movieResult.pagination.total,
+          series: seriesResult.pagination.total,
+        });
         setLoading(false);
       })
       .catch((caught) => {
@@ -87,6 +93,8 @@ export function HomePage() {
     );
   }
 
+  const total = totals.channels + totals.movies + totals.series;
+  const providerLabel = `${providers.length} ${providers.length === 1 ? 'provider' : 'providers'}`;
   const rows = [
     { id: 'channels', title: 'Live TV', to: '/live', items: channels, kind: 'channel' as const },
     { id: 'movies', title: 'Recently added movies', to: '/movies', items: movies, kind: 'movie' as const },
@@ -96,14 +104,18 @@ export function HomePage() {
   return (
     <div className="home-page">
       <section className="home-intro">
-        <p className="eyebrow"><Sparkles size={14} /> Your catalogue</p>
-        <h1>Welcome back</h1>
-        <p>{providers.length} connected {providers.length === 1 ? 'provider' : 'providers'} · browse what you imported.</p>
-        <div className="home-provider-list" aria-label="Your providers">
+        <p className="eyebrow">Your catalogue</p>
+        <h1>{total.toLocaleString('en-US')} titles from {providerLabel}</h1>
+        <p>
+          {totals.channels.toLocaleString('en-US')} live channels ·{' '}
+          {totals.movies.toLocaleString('en-US')} movies ·{' '}
+          {totals.series.toLocaleString('en-US')} series
+        </p>
+        <ul className="home-provider-list" aria-label="Your providers">
           {providers.map((provider) => (
-            <span className="badge badge--neutral" key={provider.id}>{provider.name}</span>
+            <li key={provider.id}>{provider.name}</li>
           ))}
-        </div>
+        </ul>
       </section>
 
       {rows.filter((row) => row.items.length > 0).length === 0 ? (
@@ -132,11 +144,6 @@ export function HomePage() {
             </section>
           ))
       )}
-
-      <footer className="page-footer">
-        <span>VEYRO · Your sources, your catalogue</span>
-        <span>Playback is added in Phase 5. No video is relayed through Veyro.</span>
-      </footer>
     </div>
   );
 }
