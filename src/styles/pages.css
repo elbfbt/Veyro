@@ -995,6 +995,12 @@
     margin-top: 8px;
   }
 
+  .provider-actions__confirm {
+    flex: 1 1 100%;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
   .provider-helper {
     display: flex;
     gap: 7px;

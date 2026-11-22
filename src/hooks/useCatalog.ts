@@ -21,7 +21,10 @@ export function useDebouncedValue<T>(value: T, delay = 250): T {
 interface CatalogState<T> {
   items: T[];
   pagination: PageResult<T>['pagination'] | null;
+  /** True only when there is nothing on screen yet. */
   loading: boolean;
+  /** True while revalidating a catalogue that is already visible (SWR). */
+  refreshing: boolean;
   error: string;
 }
 
@@ -41,17 +44,35 @@ export function usePagedCatalog<T>(
     items: [],
     pagination: emptyPagination as PageResult<T>['pagination'],
     loading: true,
+    refreshing: false,
     error: '',
   });
   const key = useMemo(() => JSON.stringify(query), [query]);
 
   const load = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true, error: '' }));
+    // Stale-while-revalidate: keep the previous page visible while refetching.
+    setState((current) => ({
+      ...current,
+      loading: current.items.length === 0,
+      refreshing: current.items.length > 0,
+      error: '',
+    }));
     try {
       const result = await loader(query);
-      setState({ items: result.items, pagination: result.pagination, loading: false, error: '' });
+      setState({
+        items: result.items,
+        pagination: result.pagination,
+        loading: false,
+        refreshing: false,
+        error: '',
+      });
     } catch (error) {
-      setState((current) => ({ ...current, loading: false, error: errorMessage(error) }));
+      setState((current) => ({
+        ...current,
+        loading: false,
+        refreshing: false,
+        error: errorMessage(error),
+      }));
     }
     // The serialized query is the stable dependency; callers memoize query objects.
     // eslint-disable-next-line react-hooks/exhaustive-deps

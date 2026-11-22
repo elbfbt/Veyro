@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { ContentCard } from '../../components/content/ContentCard';
-import { CatalogEmpty, CatalogError, CatalogSkeleton } from '../../components/content/CatalogStates';
+import {
+  CatalogEmpty,
+  CatalogError,
+  CatalogSkeleton,
+  HeroSkeleton,
+} from '../../components/content/CatalogStates';
+import { HomeHero } from '../../components/home/HomeHero';
 import { errorMessage } from '../../hooks/useCatalog';
 import { listChannels, listMovies, listMyProviders, listSeries } from '../../lib/contentApi';
 import { useAuth } from '../../state/AuthContext';
@@ -73,7 +79,14 @@ export function HomePage() {
   }
 
   if (loading) {
-    return <div className="home-page home-empty"><CatalogSkeleton count={8} /></div>;
+    return (
+      <div className="home-page">
+        <HeroSkeleton />
+        <div className="home-empty">
+          <CatalogSkeleton count={8} />
+        </div>
+      </div>
+    );
   }
 
   if (error) {
@@ -95,6 +108,11 @@ export function HomePage() {
 
   const total = totals.channels + totals.movies + totals.series;
   const providerLabel = `${providers.length} ${providers.length === 1 ? 'provider' : 'providers'}`;
+  const featured = movies[0]
+    ? { kind: 'movie' as const, item: movies[0] }
+    : series[0]
+      ? { kind: 'series' as const, item: series[0] }
+      : null;
   const rows = [
     { id: 'channels', title: 'Live TV', to: '/live', items: channels, kind: 'channel' as const },
     { id: 'movies', title: 'Recently added movies', to: '/movies', items: movies, kind: 'movie' as const },
@@ -103,20 +121,13 @@ export function HomePage() {
 
   return (
     <div className="home-page">
-      <section className="home-intro">
-        <p className="eyebrow">Your catalogue</p>
-        <h1>{total.toLocaleString('en-US')} titles from {providerLabel}</h1>
-        <p>
-          {totals.channels.toLocaleString('en-US')} live channels ·{' '}
-          {totals.movies.toLocaleString('en-US')} movies ·{' '}
-          {totals.series.toLocaleString('en-US')} series
-        </p>
-        <ul className="home-provider-list" aria-label="Your providers">
-          {providers.map((provider) => (
-            <li key={provider.id}>{provider.name}</li>
-          ))}
-        </ul>
-      </section>
+      {featured && <HomeHero item={featured.item} kind={featured.kind} />}
+
+      <p className="home-totals tnum">
+        {total.toLocaleString('en-US')} titles from {providerLabel} ·{' '}
+        {totals.channels.toLocaleString('en-US')} live · {totals.movies.toLocaleString('en-US')} movies ·{' '}
+        {totals.series.toLocaleString('en-US')} series
+      </p>
 
       {rows.filter((row) => row.items.length > 0).length === 0 ? (
         <div className="home-empty">

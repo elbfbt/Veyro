@@ -6,6 +6,7 @@ import { BrandProvider } from './brand/BrandProvider';
 import { AuthProvider } from './state/AuthContext';
 import { LibraryProvider } from './state/LibraryContext';
 import { PreferencesProvider } from './state/PreferencesContext';
+import { ToastProvider } from './state/ToastContext';
 import './styles/index.css';
 
 const root = document.getElementById('root');
@@ -17,9 +18,11 @@ createRoot(root).render(
       <PreferencesProvider>
         <AuthProvider>
           <LibraryProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
+            <ToastProvider>
+              <BrowserRouter>
+                <App />
+              </BrowserRouter>
+            </ToastProvider>
           </LibraryProvider>
         </AuthProvider>
       </PreferencesProvider>

@@ -79,7 +79,12 @@ export function CatalogBrowsePage({
         eyebrow={eyebrow}
         title={title}
         description={description}
-        actions={<span className="result-count">{catalog.pagination?.total ?? 0} items</span>}
+        actions={
+          <span className="result-count" aria-live="polite">
+            {catalog.refreshing && <span className="catalog-updating">Updating…</span>}
+            {catalog.pagination?.total ?? 0} items
+          </span>
+        }
       />
 
       <CatalogFilters
@@ -125,9 +130,18 @@ export function CatalogBrowsePage({
         </div>
       )}
 
+      {catalog.error && catalog.items.length > 0 && (
+        <p className="filter-error" role="alert">
+          The last refresh failed. Showing the previous results.{' '}
+          <button type="button" className="text-link" onClick={() => void catalog.retry()}>
+            Retry
+          </button>
+        </p>
+      )}
+
       {catalog.loading ? (
         <CatalogSkeleton />
-      ) : catalog.error ? (
+      ) : catalog.error && catalog.items.length === 0 ? (
         <CatalogError message={catalog.error} onRetry={() => void catalog.retry()} />
       ) : catalog.items.length === 0 ? (
         <CatalogEmpty
@@ -135,7 +149,7 @@ export function CatalogBrowsePage({
           message={search ? 'Try another title or clear your filters.' : emptyMessage}
         />
       ) : (
-        <div className="media-grid">
+        <div className="media-grid" aria-busy={catalog.refreshing}>
           {catalog.items.map((item, index) => (
             <ContentCard key={item.id} item={item} kind={kind} spatialId={`${kind}-${index}`} />
           ))}

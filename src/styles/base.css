@@ -382,5 +382,11 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+
+    /* A loading indicator is functional motion, not decoration. */
+    .spinner {
+      animation-duration: 900ms !important;
+      animation-iteration-count: infinite !important;
+    }
   }
 }

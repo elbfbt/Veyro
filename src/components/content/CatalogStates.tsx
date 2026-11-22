@@ -14,6 +14,35 @@ export function CatalogSkeleton({ count = 12 }: { count?: number }) {
   );
 }
 
+/** Art + copy placeholders keep the details layout from jumping on load. */
+export function DetailSkeleton() {
+  return (
+    <div className="inner-page" aria-busy="true" aria-label="Loading details">
+      <div className="detail-skeleton">
+        <span className="detail-skeleton__art skeleton-block" />
+        <div className="detail-skeleton__body">
+          <span className="skeleton-line skeleton-line--eyebrow" />
+          <span className="skeleton-line skeleton-line--title" />
+          <span className="skeleton-line skeleton-line--meta" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line skeleton-line--short" />
+          <span className="skeleton-line skeleton-line--button" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Reserves the featured area on the home page while the catalogue loads. */
+export function HeroSkeleton() {
+  return (
+    <div className="hero-skeleton" aria-hidden="true">
+      <span className="skeleton-block" />
+    </div>
+  );
+}
+
 export function CatalogEmpty({
   title,
   message,

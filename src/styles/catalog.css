@@ -250,6 +250,119 @@
     gap: 16px;
   }
 
+
+  /* Home hero + loading placeholders ------------------------------------- */
+  .hero--home {
+    min-height: min(600px, 70svh);
+    padding-bottom: calc(64px + var(--safe-bottom));
+  }
+
+  .hero--home .hero__media img {
+    object-position: 50% 20%;
+    filter: brightness(0.78);
+  }
+
+  .home-totals {
+    margin: 0 var(--page-x) var(--space-2);
+    color: var(--text-subtle);
+    font-size: 0.78rem;
+  }
+
+  .hero-skeleton {
+    position: relative;
+    min-height: min(600px, 70svh);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .hero-skeleton .skeleton-block {
+    position: absolute;
+    inset: 0;
+  }
+
+  .home-empty .media-grid {
+    padding: 0 var(--page-x);
+  }
+
+  .detail-skeleton {
+    display: grid;
+    grid-template-columns: minmax(220px, 360px) 1fr;
+    gap: clamp(24px, 4vw, 52px);
+    padding: var(--space-5);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .detail-skeleton__art {
+    aspect-ratio: 2 / 3;
+    border-radius: var(--radius-md);
+  }
+
+  .detail-skeleton__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+  }
+
+  .skeleton-line {
+    display: block;
+    height: 14px;
+    border-radius: var(--radius-xs);
+    background: linear-gradient(110deg, var(--surface) 20%, var(--surface-strong) 42%, var(--surface) 64%);
+    background-size: 300% 100%;
+    animation: catalog-shimmer 1.6s linear infinite;
+  }
+
+  .skeleton-line--eyebrow {
+    width: 120px;
+    height: 10px;
+  }
+
+  .skeleton-line--title {
+    width: 72%;
+    height: 42px;
+  }
+
+  .skeleton-line--meta {
+    width: 38%;
+  }
+
+  .skeleton-line--short {
+    width: 58%;
+  }
+
+  .skeleton-line--button {
+    width: 150px;
+    height: var(--hit-size);
+    margin-top: var(--space-2);
+    border-radius: var(--radius-pill);
+  }
+
+  .catalog-updating {
+    margin-right: var(--space-2);
+    color: var(--brand-accent-light);
+    font-weight: 600;
+  }
+
+  @media (max-width: 860px) {
+    .detail-skeleton {
+      grid-template-columns: 1fr;
+    }
+
+    .detail-skeleton__art {
+      max-width: 260px;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .hero--home,
+    .hero-skeleton {
+      min-height: min(460px, 62svh);
+    }
+  }
+
   .home-intro {
     margin-bottom: 30px;
   }

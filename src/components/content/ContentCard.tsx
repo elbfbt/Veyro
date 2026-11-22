@@ -1,6 +1,9 @@
+import { Bookmark, Heart } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { ChannelItem, ContentKind, EpisodeItem, MovieItem, SeriesItem } from '../../types/content';
 import { contentMeta } from '../../lib/content';
+import { useOptionalLibrary, type LibraryEntry } from '../../state/LibraryContext';
+import { useOptionalToast } from '../../state/ToastContext';
 import { SafeArtwork } from './SafeArtwork';
 
 export type CatalogEntry = ChannelItem | MovieItem | SeriesItem | EpisodeItem;
@@ -54,6 +57,42 @@ function details(item: CatalogEntry, kind: ContentKind) {
 
 export function ContentCard({ item, kind, spatialId }: ContentCardProps) {
   const view = details(item, kind);
+  const library = useOptionalLibrary();
+  const toast = useOptionalToast();
+  const favorite = library?.isFavorite(item.id) ?? false;
+  const saved = library?.isInWatchlist(item.id) ?? false;
+
+  const toggle = (target: 'favorite' | 'watchlist') => {
+    if (!library) return;
+    const entry: LibraryEntry = {
+      id: item.id,
+      kind,
+      title: view.title,
+      art: view.art,
+      meta: view.meta || item.providerName,
+      providerName: item.providerName,
+    };
+    const result =
+      target === 'favorite' ? library.toggleFavorite(entry) : library.toggleWatchlist(entry);
+    const label = target === 'favorite' ? 'favorites' : 'your watchlist';
+    if (result.error) {
+      toast?.showToast({ message: result.error, tone: 'error' });
+      return;
+    }
+    if (result.added) {
+      toast?.showToast({ message: `Added “${view.title}” to ${label}.`, tone: 'success' });
+      return;
+    }
+    toast?.showToast({
+      message: `Removed “${view.title}” from ${label}.`,
+      action: {
+        label: 'Undo',
+        onAction: () =>
+          target === 'favorite' ? library.toggleFavorite(entry) : library.toggleWatchlist(entry),
+      },
+    });
+  };
+
   return (
     <article className={`media-card content-card content-card--${kind}`}>
       <Link
@@ -76,6 +115,32 @@ export function ContentCard({ item, kind, spatialId }: ContentCardProps) {
           <span className="media-card__meta">{view.meta || item.providerName}</span>
         </span>
       </Link>
+      {library && (
+        <span className="media-card__actions media-card__actions--always">
+          <button
+            type="button"
+            className={`media-card__action${favorite ? ' is-active' : ''}`}
+            aria-pressed={favorite}
+            aria-label={`${favorite ? 'Remove' : 'Add'} ${view.title} ${favorite ? 'from' : 'to'} favorites`}
+            title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+            data-spatial={`${spatialId ?? item.id}-favorite`}
+            onClick={() => toggle('favorite')}
+          >
+            <Heart size={14} fill={favorite ? 'currentColor' : 'none'} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={`media-card__action${saved ? ' is-active' : ''}`}
+            aria-pressed={saved}
+            aria-label={`${saved ? 'Remove' : 'Add'} ${view.title} ${saved ? 'from' : 'to'} watchlist`}
+            title={saved ? 'Remove from watchlist' : 'Add to watchlist'}
+            data-spatial={`${spatialId ?? item.id}-watchlist`}
+            onClick={() => toggle('watchlist')}
+          >
+            <Bookmark size={14} fill={saved ? 'currentColor' : 'none'} aria-hidden="true" />
+          </button>
+        </span>
+      )}
     </article>
   );
 }
