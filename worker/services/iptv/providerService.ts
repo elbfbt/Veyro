@@ -30,8 +30,12 @@ export class ProviderError extends Error {
   }
 }
 
-/** Maximum number of entries accepted in a single M3U file import. */
-const MAX_TOTAL_ENTRIES = 100_000;
+/**
+ * Maximum number of entries accepted in a single M3U import. Shared by the
+ * chunked file import and the server-side (URL) import so both paths accept the
+ * same playlists.
+ */
+const MAX_TOTAL_ENTRIES = DEFAULT_MAX_PLAYLIST_ENTRIES;
 
 /** Number of entries imported per chunked request. */
 const CHUNK_SIZE = 1_000;
@@ -740,6 +744,20 @@ export class ProviderService {
     } catch (error) {
       if (error instanceof PlaylistLimitError) throw new ProviderError('playlist_too_large', 413, error.message);
       throw new ProviderError('invalid_playlist', 400, 'The playlist is not valid M3U content.');
+    }
+
+    // A playlist can be valid M3U yet contain nothing importable (an empty grid,
+    // a provider stub such as a bare "#EXTM3U" header, every line filtered out,
+    // or an upstream response that is not the playlist at all). Saving that and
+    // then reporting a successful refresh would mark the provider active with an
+    // empty catalogue, which is indistinguishable from a working import. Fail
+    // loudly instead, before anything is written.
+    if (parsed.entries.length === 0) {
+      throw new ProviderError(
+        'empty_playlist',
+        422,
+        'The playlist contained no importable entries, so nothing was saved. Check that the playlist URL returns the full M3U file.',
+      );
     }
 
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));

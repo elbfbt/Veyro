@@ -490,14 +490,22 @@ export class D1ProviderRepository {
     }
 
     const playlistId = crypto.randomUUID();
-    const metadata = JSON.stringify({ lastImport: stats, checksum });
+    // A refresh that wrote no catalogue rows must never be recorded as a
+    // successful, active import: that is exactly how an empty catalogue used to
+    // be reported as "refresh succeeded". Keep the provider retryable instead.
+    const savedRows = stats.added + stats.updated;
+    const metadata = JSON.stringify(
+      savedRows > 0
+        ? { lastImport: stats, checksum }
+        : { lastImport: stats, checksum, lastError: 'No catalogue entries were saved by the last refresh.' },
+    );
     await this.monitoredBatch('import.playlist-insert', [
       this.db
         .prepare('INSERT INTO playlists (id, user_id, provider_id, item_count, checksum, status, last_imported_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(playlistId, userId, providerId, stats.totalEntries, checksum, 'ready', now, now),
       this.db
         .prepare('UPDATE providers SET last_refreshed_at = ?, status = ?, metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-        .bind(now, 'active', metadata, now, providerId, userId),
+        .bind(now, savedRows > 0 ? 'active' : 'error', metadata, now, providerId, userId),
     ]);
     return playlistId;
   }
@@ -516,6 +524,18 @@ export class D1ProviderRepository {
     }
 
     const statements: ProviderStatement[] = [];
+    // Flush in bounded batches instead of buffering one statement per catalogue
+    // row. Without this, a large server-side (URL) import could hold tens of
+    // thousands of prepared statements in memory. Order is preserved, so
+    // categories are still written before the content rows that reference them.
+    const flushStatements = async () => {
+      while (statements.length > 0) {
+        await this.monitoredBatch('catalog.upsert-chunk', statements.splice(0, CHUNK_SIZE));
+      }
+    };
+    const flushIfFull = async () => {
+      if (statements.length >= CHUNK_SIZE) await flushStatements();
+    };
     let added = 0;
     let updated = 0;
     let categoriesAdded = 0;
@@ -572,6 +592,7 @@ export class D1ProviderRepository {
           );
           added += 1;
         }
+        await flushIfFull();
         continue;
       }
 
@@ -621,11 +642,10 @@ export class D1ProviderRepository {
         }
         added += 1;
       }
+      await flushIfFull();
     }
 
-    for (let index = 0; index < statements.length; index += CHUNK_SIZE) {
-      await this.monitoredBatch('catalog.upsert-chunk', statements.slice(index, index + CHUNK_SIZE));
-    }
+    await flushStatements();
     return { added, updated, categoriesAdded };
   }
 
@@ -658,6 +678,15 @@ export class D1ProviderRepository {
     existingIds.set('episodes', new Set((episodeRows.results ?? []).map((row) => row.id)));
 
     const statements: ProviderStatement[] = [];
+    // Bounded batches: see the rich-schema path above.
+    const flushStatements = async () => {
+      while (statements.length > 0) {
+        await this.monitoredBatch('catalog.legacy-upsert-chunk', statements.splice(0, CHUNK_SIZE));
+      }
+    };
+    const flushIfFull = async () => {
+      if (statements.length >= CHUNK_SIZE) await flushStatements();
+    };
     let added = 0;
     let updated = 0;
     let categoriesAdded = 0;
@@ -712,6 +741,7 @@ export class D1ProviderRepository {
             .bind(id, playlistId, categoryId, entry.name, entry.posterUrl ?? entry.tvgLogo ?? null, null, entry.description ?? null),
         );
         countChange('series', id);
+        await flushIfFull();
         continue;
       }
 
@@ -741,11 +771,10 @@ export class D1ProviderRepository {
         );
         countChange('episodes', id);
       }
+      await flushIfFull();
     }
 
-    for (let index = 0; index < statements.length; index += CHUNK_SIZE) {
-      await this.monitoredBatch('catalog.legacy-upsert-chunk', statements.slice(index, index + CHUNK_SIZE));
-    }
+    await flushStatements();
     return { added, updated, categoriesAdded };
   }
 
