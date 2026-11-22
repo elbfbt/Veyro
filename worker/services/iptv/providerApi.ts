@@ -1,4 +1,8 @@
-import { PlaylistFetchError, UpstreamTimeoutError } from './fetchPlaylist';
+import {
+  PlaylistFetchError,
+  UpstreamHttpError,
+  UpstreamTimeoutError,
+} from './fetchPlaylist';
 import { PlaylistLimitError } from './m3uParser';
 import { ProviderError, isProviderError } from './providerService';
 import { UnsafeUrlError } from './urlSafety';
@@ -31,6 +35,7 @@ function errorResponse(error: unknown): Response {
   if (isProviderError(error)) return json({ error: error.code, message: error.message }, error.status);
   if (error instanceof XtreamClientError) return json({ error: error.code, message: error.message }, error.status);
   if (error instanceof UpstreamTimeoutError) return json({ error: 'provider_timeout', message: 'Provider request timed out.' }, 504);
+  if (error instanceof UpstreamHttpError) return json({ error: 'upstream_http_error', message: `The upstream request failed with status ${error.status}.` }, 502);
   if (error instanceof UnsafeUrlError) return json({ error: 'unsafe_url', message: 'The URL is not allowed.' }, 400);
   if (error instanceof PlaylistLimitError) return json({ error: 'playlist_too_large', message: error.message }, 413);
   if (error instanceof PlaylistFetchError) return json({ error: 'playlist_fetch_failed', message: 'The playlist could not be retrieved.' }, 502);
