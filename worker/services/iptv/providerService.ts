@@ -5,6 +5,7 @@ import { parseM3u, PlaylistLimitError, DEFAULT_MAX_PLAYLIST_BYTES, DEFAULT_MAX_P
 import { UnsafeUrlError, assertSafePublicUrl } from './urlSafety';
 import { XtreamClient, XtreamClientError } from './xtreamClient';
 import type {
+  BackgroundTaskScheduler,
   ConnectionTestResult,
   CreateProviderInput,
   ImportProgress,
@@ -142,7 +143,11 @@ export class ProviderService {
     return toView(await this.owned(userId, id));
   }
 
-  async create(userId: string, input: CreateProviderInput): Promise<ProviderView> {
+  async create(
+    userId: string,
+    input: CreateProviderInput,
+    scheduler?: BackgroundTaskScheduler,
+  ): Promise<ProviderView> {
     const type = providerType(input.type);
     const name = validName(input.name);
     const now = this.clock.now();
@@ -171,6 +176,7 @@ export class ProviderService {
     }
 
     const existing = await this.repository.list(userId);
+    const isRemoteType = type === 'm3u_url' || type === 'xtream';
     const provider: StoredProvider = {
       id: this.ids.newId(),
       userId,
@@ -179,7 +185,10 @@ export class ProviderService {
       serverUrl,
       credentialsEncrypted,
       credentialsKeyId,
-      status: 'active',
+      // Remote providers start in 'refreshing' state while the initial
+      // catalogue import runs in the background of this request. They are
+      // never reported as 'active' with an empty catalogue.
+      status: isRemoteType ? 'refreshing' : 'active',
       isDefault: existing.length === 0,
       lastRefreshAt: null,
       metadata,
@@ -187,7 +196,32 @@ export class ProviderService {
       updatedAt: now,
     };
     await this.repository.create(provider);
-    return toView(provider);
+
+    // Trigger the initial catalogue import for remote providers. Reuses the
+    // existing refresh() pipeline — no duplicated import logic. If the import
+    // fails, refresh() already sets status to 'error' with lastError, and the
+    // provider is preserved so the user can retry.
+    //
+    // When a request execution context (scheduler) is available, the import is
+    // scheduled via waitUntil so the response returns promptly without waiting
+    // for the remote fetch/parse/write to complete. Cloudflare Workers
+    // guarantees waitUntil promises run to completion even after the response
+    // is sent. When no scheduler is available (e.g. tests), fall back to
+    // synchronous import so behaviour is unchanged.
+    if (isRemoteType) {
+      const refreshPromise = this.refresh(userId, provider.id).catch(() => {
+        // Errors are already handled inside refresh(): provider is left in
+        // 'error' state with lastError set. Suppress the rejection so
+        // waitUntil does not surface an unhandled rejection.
+      });
+      if (scheduler) {
+        scheduler.waitUntil(refreshPromise);
+      } else {
+        await refreshPromise;
+      }
+    }
+
+    return this.get(userId, provider.id);
   }
 
   async update(userId: string, id: string, input: UpdateProviderInput): Promise<ProviderView> {
@@ -647,6 +681,22 @@ export class ProviderService {
       error: job.error,
       providerId: job.providerId,
     };
+  }
+
+  async cancelImport(userId: string, jobId: string): Promise<boolean> {
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+    if (job.status === 'completed') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        'Cannot cancel a completed import job.',
+      );
+    }
+    return this.repository.cancelImportJob(userId, jobId, now);
   }
 
   async importComplete(userId: string, jobId: string): Promise<ProviderView> {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, FileUp, Link2, RefreshCw, Trash2, Wifi } from 'lucide-react';
-import { ApiError, apiRequest, importComplete, importChunk, importInit, getImportProgress } from '../../lib/api';
+import { ApiError, apiRequest, importCancel, importComplete, importChunk, importInit, getImportProgress } from '../../lib/api';
 import { parseM3u, type M3uEntry } from '../../lib/m3uParser';
 import type { ConnectionTestResult, Provider, ProviderImportStats, ProviderType } from '../../types/providers';
 
@@ -417,11 +417,22 @@ export function ProvidersSection() {
     }
   }
 
-  function cancelImport() {
+  async function cancelImport() {
     abortControllerRef.current?.abort();
+
+    let serverCleanupFailed = false;
+    if (importState.jobId) {
+      try {
+        await importCancel(importState.jobId);
+      } catch (caught) {
+        serverCleanupFailed = true;
+        setNotice(`Import cancelled locally. Server cleanup failed: ${message(caught)}.`);
+      }
+    }
+
     setImportState(EMPTY_IMPORT);
     setError('');
-    setNotice('Import cancelled.');
+    if (!serverCleanupFailed) setNotice('Import cancelled.');
   }
 
   /* ── Render ─────────────────────────────────────────────────── */

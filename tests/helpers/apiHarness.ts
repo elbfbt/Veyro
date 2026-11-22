@@ -1,4 +1,5 @@
 import type { AuthService } from '../../worker/services/auth/service';
+import type { BackgroundTaskScheduler } from '../../worker/services/iptv/providerApi';
 import type { ProviderApiService } from '../../worker/services/iptv/providerApi';
 import type { ContentApiService } from '../../worker/services/content/api';
 import { createApiHandler } from '../../worker/api';
@@ -34,7 +35,13 @@ export function createHarness(
     method: string,
     path: string,
     body?: unknown,
-    options: { csrf?: boolean; cookie?: boolean; session?: boolean; rawBody?: BodyInit } = {},
+    options: {
+      csrf?: boolean;
+      cookie?: boolean;
+      session?: boolean;
+      rawBody?: BodyInit;
+      scheduler?: BackgroundTaskScheduler;
+    } = {},
   ) => {
     const headers = new Headers();
     const useCookie = options.cookie ?? true;
@@ -56,6 +63,7 @@ export function createHarness(
         body: options.rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       }),
       new URL(url),
+      options.scheduler,
     );
     updateJar(response);
     return response;

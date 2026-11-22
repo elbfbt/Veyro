@@ -4,6 +4,7 @@ import { ProviderError, isProviderError } from './providerService';
 import { UnsafeUrlError } from './urlSafety';
 import { XtreamClientError } from './xtreamClient';
 import type {
+  BackgroundTaskScheduler,
   ConnectionTestResult,
   ImportProgress,
   ImportStats,
@@ -12,6 +13,7 @@ import type {
   UpdateProviderInput,
   CreateProviderInput,
 } from './types';
+export type { BackgroundTaskScheduler };
 
 const JSON_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
@@ -26,7 +28,11 @@ function json(body: unknown, status = 200): Response {
 export interface ProviderApiService {
   list(userId: string): Promise<ProviderView[]>;
   get(userId: string, id: string): Promise<ProviderView>;
-  create(userId: string, input: CreateProviderInput): Promise<ProviderView>;
+  create(
+    userId: string,
+    input: CreateProviderInput,
+    scheduler?: BackgroundTaskScheduler,
+  ): Promise<ProviderView>;
   update(userId: string, id: string, input: UpdateProviderInput): Promise<ProviderView>;
   remove(userId: string, id: string): Promise<void>;
   setDefault(userId: string, id: string): Promise<ProviderView>;
@@ -49,6 +55,7 @@ export interface ProviderApiService {
   ): Promise<{ chunkIndex: number; status: 'completed' | 'importing'; importedEntries: number }>;
   getImportProgress(userId: string, jobId: string): Promise<ImportProgress>;
   importComplete(userId: string, jobId: string): Promise<ProviderView>;
+  cancelImport(userId: string, jobId: string): Promise<boolean>;
 }
 
 function errorResponse(error: unknown): Response {
@@ -190,12 +197,26 @@ async function importCompleteRoute(
   return json({ provider });
 }
 
+async function cancelImportRoute(
+  _request: Request,
+  service: ProviderApiService,
+  userId: string,
+  jobId: string,
+): Promise<Response> {
+  const cancelled = await service.cancelImport(userId, jobId);
+  if (!cancelled) {
+    return json({ error: 'not_found', message: 'Import job not found or already completed.' }, 404);
+  }
+  return json({ ok: true });
+}
+
 /** Returns null for non-provider routes so api.ts can continue routing. */
 export async function handleProviderApi(
   request: Request,
   url: URL,
   userId: string,
   service: ProviderApiService,
+  scheduler?: BackgroundTaskScheduler,
 ): Promise<Response | null> {
   if (!url.pathname.startsWith('/api/providers')) return null;
   const method = request.method.toUpperCase();
@@ -203,7 +224,11 @@ export async function handleProviderApi(
   try {
     if (url.pathname === '/api/providers') {
       if (method === 'GET') return json({ providers: await service.list(userId) });
-      if (method === 'POST') return json({ provider: await service.create(userId, createInput(await readJson(request))) }, 201);
+      if (method === 'POST')
+        return json(
+          { provider: await service.create(userId, createInput(await readJson(request)), scheduler) },
+          201,
+        );
       return null;
     }
 
@@ -227,6 +252,11 @@ export async function handleProviderApi(
     if (segments.length === 4 && segments[1] === 'providers' && segments[2] === 'import-complete' && method === 'POST') {
       return await importCompleteRoute(request, service, userId, segments[3]!);
     }
+
+    if (segments.length === 4 && segments[1] === 'providers' && segments[2] === 'import-cancel' && method === 'DELETE') {
+      return await cancelImportRoute(request, service, userId, segments[3]!);
+    }
+
     if (segments.length < 3 || segments[1] !== 'providers') return null;
     const id = segments[2];
     if (!id || id.length > 128) throw new ProviderError('not_found', 404, 'Provider not found.');

@@ -78,4 +78,38 @@ describe('ProvidersSection — chunked import blank page bug', () => {
     expect(screen.getByText(/test\.m3u8/)).toBeDefined();
     expect(document.body.textContent).toContain('KB');
   });
+
+  it('cancellation resets UI without server call when no job exists', async () => {
+    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const path = typeof url === 'string' ? url : url.pathname;
+      if (path === '/api/providers' && init?.method === 'GET') {
+        return new Response(JSON.stringify({ providers: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (path === '/api/auth/csrf') {
+        return new Response(JSON.stringify({ csrfToken: 'test-csrf-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ error: 'not_found' }), { status: 404 });
+    });
+
+    render(<ProvidersSection />);
+
+    const importButton = screen.getAllByRole('button').find((b) =>
+      b.textContent?.includes('Import M3U file (chunked)'),
+    );
+    expect(importButton).toBeDefined();
+    fireEvent.click(importButton!);
+
+    // Cancel without a job (selecting phase) — no server call, just UI reset
+    const cancelButton = screen.getByRole('button', { name: /Cancel/ });
+    fireEvent.click(cancelButton);
+
+    expect(screen.queryByText(/Import M3U Playlist/)).toBeNull();
+  });
+
 });

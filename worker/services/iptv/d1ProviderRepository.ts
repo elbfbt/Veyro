@@ -749,6 +749,75 @@ export class D1ProviderRepository {
     return { added, updated, categoriesAdded };
   }
 
+  async cancelImportJob(userId: string, jobId: string, now: number): Promise<boolean> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const job = await this.db
+        .prepare('SELECT id, provider_id, status FROM import_jobs WHERE id = ? AND user_id = ?')
+        .bind(jobId, userId)
+        .first<{ id: string; provider_id: string; status: string }>();
+      if (!job) return false;
+      if (job.status === 'completed') return false;
+
+      const playlistScope = 'playlist_id IN (SELECT id FROM playlists WHERE provider_id = ?)';
+      await this.monitoredBatch('import_job.cancel-legacy', [
+        this.db.prepare(`DELETE FROM episodes WHERE series_id IN (SELECT id FROM series WHERE ${playlistScope})`).bind(job.provider_id),
+        this.db.prepare(`DELETE FROM series WHERE ${playlistScope}`).bind(job.provider_id),
+        this.db.prepare(`DELETE FROM channels WHERE ${playlistScope}`).bind(job.provider_id),
+        this.db.prepare(`DELETE FROM movies WHERE ${playlistScope}`).bind(job.provider_id),
+        this.db.prepare(`DELETE FROM categories WHERE ${playlistScope}`).bind(job.provider_id),
+        this.db.prepare('DELETE FROM playlists WHERE provider_id = ?').bind(job.provider_id),
+        this.db.prepare('DELETE FROM import_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId),
+        this.db.prepare('DELETE FROM providers WHERE id = ? AND user_id = ?').bind(job.provider_id, userId),
+      ]);
+      return true;
+    }
+
+    const job = await this.db
+      .prepare('SELECT id, provider_id, status FROM import_jobs WHERE id = ? AND user_id = ? AND expires_at > ?')
+      .bind(jobId, userId, now)
+      .first<{ id: string; provider_id: string; status: string }>();
+    if (!job) return false;
+    if (job.status === 'completed') return false;
+
+    await this.monitoredBatch('import_job.cancel', [
+      this.db.prepare('DELETE FROM channels WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM movies WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM series WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM episodes WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM categories WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM playlists WHERE user_id = ? AND provider_id = ?').bind(userId, job.provider_id),
+      this.db.prepare('DELETE FROM import_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId),
+      this.db.prepare('DELETE FROM providers WHERE id = ? AND user_id = ?').bind(job.provider_id, userId),
+    ]);
+    return true;
+  }
+
+  async cleanupExpiredImportJobs(userId: string, now: number): Promise<number> {
+    if ((await this.schemaMode()) === 'legacy') {
+      const jobs = await this.db
+        .prepare('SELECT id, provider_id FROM import_jobs WHERE user_id = ? AND expires_at <= ? AND status != ?')
+        .bind(userId, now, 'completed')
+        .all<{ id: string; provider_id: string }>();
+      let cleaned = 0;
+      for (const job of jobs.results ?? []) {
+        const cancelled = await this.cancelImportJob(userId, job.id, now);
+        if (cancelled) cleaned += 1;
+      }
+      return cleaned;
+    }
+
+    const jobs = await this.db
+      .prepare('SELECT id, provider_id FROM import_jobs WHERE user_id = ? AND expires_at <= ? AND status != ?')
+      .bind(userId, now, 'completed')
+      .all<{ id: string; provider_id: string }>();
+    let cleaned = 0;
+    for (const job of jobs.results ?? []) {
+      const cancelled = await this.cancelImportJob(userId, job.id, now);
+      if (cancelled) cleaned += 1;
+    }
+    return cleaned;
+  }
+
   async createImportJob(
     userId: string,
     providerId: string,

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthService } from '../worker/services/auth/service';
 import { ProviderCredentialCipher } from '../worker/services/iptv/credentials';
+import { PlaylistFetchError } from '../worker/services/iptv/fetchPlaylist';
+import type { BackgroundTaskScheduler } from '../worker/services/iptv/providerApi';
 import { ProviderService } from '../worker/services/iptv/providerService';
 import { createHarness } from './helpers/apiHarness';
 import { MemoryAuthRepository, MemoryRateLimiter, TestPasswordHasher } from './helpers/memoryAuth';
@@ -202,5 +204,215 @@ https://stream.test/bbc.m3u8
     expect(body.provider.type).toBe('m3u_file');
     expect(body.provider.xtreamUsername).toBeNull();
     expect([...repository.catalog.values()][0]?.[0]?.name).toBe('CNN Cooking');
+  });
+
+  /* ── Auto import on provider creation ────────────────────────── */
+
+  it('M3U URL creation triggers automatic catalogue import', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-auto@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Auto URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is active after auto-import completes
+    expect(body.provider.status).toBe('active');
+    expect(body.provider.importing).toBe(false);
+
+    // fetchPlaylist was called during auto-import
+    expect(fetchPlaylist).toHaveBeenCalled();
+
+    // Catalogue is populated
+    const providerId = body.provider.id;
+    // Use the harness to list providers and find ours
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === providerId);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('active');
+    expect(imported.lastImport?.totalEntries).toBeGreaterThan(0);
+  });
+
+  it('M3U URL creation does not falsely report success before import is known', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-nofail@example.com');
+
+    // Make fetchPlaylist throw to simulate a failed import
+    fetchPlaylist.mockRejectedValueOnce(new PlaylistFetchError());
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Failing URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    });
+
+    // Creation still returns 201 (provider is preserved)
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is in error state, not silently successful
+    expect(body.provider.status).toBe('error');
+    expect(body.provider.lastError).toBe('The provider could not be reached.');
+    expect(body.provider.importing).toBe(false);
+  });
+
+  it('M3U URL failed import leaves provider retryable', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-retry@example.com');
+
+    // First creation fails
+    fetchPlaylist.mockRejectedValueOnce(new Error('upstream down'));
+    const failed = await harness.call('POST', '/api/providers', {
+      name: 'Retry URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    });
+    expect(failed.status).toBe(201);
+    const failedBody = await failed.json();
+    expect(failedBody.provider.status).toBe('error');
+
+    const providerId = failedBody.provider.id;
+
+    // Provider exists in the list with error state
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === providerId);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('error');
+
+    // Retry via refresh succeeds
+    fetchPlaylist.mockResolvedValueOnce({
+      text: '#EXTM3U\n#EXTINF:-1 tvg-id="cnn",CNN\nhttps://stream.example.com/cnn.m3u8\n',
+      bytes: 60,
+    });
+    const refreshed = await harness.call('POST', `/api/providers/${providerId}/refresh`);
+    expect(refreshed.status).toBe(200);
+    const stats = await refreshed.json();
+    expect(stats.added).toBe(1);
+
+    // Provider is now active
+    const listResp2 = await harness.call('GET', '/api/providers');
+    const listBody2 = await listResp2.json();
+    const active = listBody2.providers.find((p: { id: string }) => p.id === providerId);
+    expect(active!.status).toBe('active');
+  });
+
+  it('ownership is enforced on auto-imported URL providers', async () => {
+    const { harness, other } = setup();
+    await register(harness, 'url-owner@example.com');
+    await register(other, 'url-other@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Owner URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    });
+    expect(response.status).toBe(201);
+    const providerId = (await response.json()).provider.id;
+
+    // Other user cannot access the auto-imported provider
+    expect((await other.call('GET', `/api/providers/${providerId}`)).status).toBe(404);
+    expect((await other.call('DELETE', `/api/providers/${providerId}`)).status).toBe(404);
+  });
+
+  /* ── Background refresh on provider creation ─────────────────── */
+
+  it('M3U URL creation returns promptly without waiting for remote import', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-bg@example.com');
+
+    // Mock execution context that captures the background promise
+    const backgroundPromises: Promise<unknown>[] = [];
+    const scheduler: BackgroundTaskScheduler = {
+      waitUntil: (promise: Promise<unknown>) => backgroundPromises.push(promise),
+    };
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Background URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    }, { scheduler });
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is refreshing, not active — import runs in background
+    expect(body.provider.status).toBe('refreshing');
+    expect(body.provider.importing).toBe(false);
+
+    // Background task was scheduled
+    expect(backgroundPromises).toHaveLength(1);
+
+    // fetchPlaylist was kicked off (the promise started executing)
+    expect(fetchPlaylist).toHaveBeenCalled();
+
+    // Await the background import to completion
+    await backgroundPromises[0];
+
+    // After background import completes, provider is active and catalogue populated
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('active');
+    expect(imported.lastImport?.totalEntries).toBeGreaterThan(0);
+  });
+
+  it('M3U URL background refresh failure leaves provider retryable with error state', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-bg-fail@example.com');
+
+    // Make fetchPlaylist throw to simulate a failed import
+    fetchPlaylist.mockRejectedValueOnce(new PlaylistFetchError());
+
+    const backgroundPromises: Promise<unknown>[] = [];
+    const scheduler: BackgroundTaskScheduler = {
+      waitUntil: (promise: Promise<unknown>) => backgroundPromises.push(promise),
+    };
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Background Failing URL',
+      type: 'm3u_url',
+      url: 'https://provider.example.com/playlist.m3u8',
+    }, { scheduler });
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is refreshing immediately (not waiting for import)
+    expect(body.provider.status).toBe('refreshing');
+    expect(backgroundPromises).toHaveLength(1);
+
+    // Await the background import — it resolves because refresh() catches errors
+    await backgroundPromises[0];
+
+    // Provider is now in error state, retryable
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('error');
+    expect(imported.lastError).toBe('The provider could not be reached.');
+
+    // Retry via refresh succeeds
+    fetchPlaylist.mockResolvedValueOnce({
+      text: '#EXTM3U\n#EXTINF:-1 tvg-id="cnn",CNN\nhttps://stream.example.com/cnn.m3u8\n',
+      bytes: 60,
+    });
+    const refreshed = await harness.call('POST', `/api/providers/${body.provider.id}/refresh`);
+    expect(refreshed.status).toBe(200);
+    const stats = await refreshed.json();
+    expect(stats.added).toBe(1);
+
+    // Provider is now active
+    const listResp2 = await harness.call('GET', '/api/providers');
+    const listBody2 = await listResp2.json();
+    const active = listBody2.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(active!.status).toBe('active');
   });
 });

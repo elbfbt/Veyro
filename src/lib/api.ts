@@ -124,3 +124,10 @@ export async function importComplete(jobId: string): Promise<{ provider: { id: s
     method: 'POST',
   });
 }
+
+/** Cancel an active chunked import job on the server. */
+export async function importCancel(jobId: string): Promise<void> {
+  await apiRequest(`/api/providers/import-cancel/${jobId}`, {
+    method: 'DELETE',
+  });
+}

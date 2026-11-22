@@ -717,4 +717,132 @@ describe('chunked M3U import', () => {
     expect(importedProvider).not.toBeUndefined();
     expect(importedProvider!.importing).toBe(true);
   });
+
+  /* ── Cancel endpoint ─────────────────────────────────────────── */
+
+  async function cancelJob(
+    harness: ReturnType<typeof setup>['harness'],
+    jobId: string,
+    expectedStatus = 200,
+  ) {
+    const response = await harness.call('DELETE', `/api/providers/import-cancel/${jobId}`);
+    expect(response.status).toBe(expectedStatus);
+    if (expectedStatus === 200) {
+      return (await response.json()) as { ok: boolean };
+    }
+    return null;
+  }
+
+  it('cancels own active chunked import job', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'cancel-owner@example.com');
+
+    // 3 entries across 2 chunks — submit only chunk 0, leaving job active
+    const { jobId, providerId } = await initJob(harness, 3, 2);
+    await submitChunk(harness, jobId, 0, [makeEntry(0), makeEntry(1)]);
+
+    // Job exists and provider exists before cancel
+    const jobBefore = await repository.getImportJob(userId, jobId, 1_700_000_000);
+    expect(jobBefore).not.toBeNull();
+    expect(jobBefore!.status).toBe('importing');
+    const providerBefore = await repository.find(userId, providerId);
+    expect(providerBefore).not.toBeNull();
+
+    const result = await cancelJob(harness, jobId);
+    expect(result!.ok).toBe(true);
+
+    // Job is deleted
+    const jobAfter = await repository.getImportJob(userId, jobId, 1_700_000_000);
+    expect(jobAfter).toBeNull();
+
+    // Temporary provider is deleted
+    const providerAfter = await repository.find(userId, providerId);
+    expect(providerAfter).toBeNull();
+
+    // Catalogue entries are deleted
+    expect(repository.catalog.get(providerId)).toBeUndefined();
+  });
+
+  it('cannot cancel another user’s job', async () => {
+    const { harness, other, repository } = setup();
+    const ownerId = await register(harness, 'cancel-owner@example.com');
+    await register(other, 'cancel-other@example.com');
+
+    const { jobId } = await initJob(harness, 1, 1);
+
+    // Other user cannot access the job
+    const response = await other.call('DELETE', `/api/providers/import-cancel/${jobId}`);
+    expect(response.status).toBe(404);
+
+    // Job still exists for the owner
+    const job = await repository.getImportJob(ownerId, jobId, 1_700_000_000);
+    expect(job).not.toBeNull();
+  });
+
+  it('cannot cancel a completed import job', async () => {
+    const { harness } = setup();
+    await register(harness, 'cancel-complete@example.com');
+
+    const { jobId, providerId } = await initJob(harness, 1, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0)]);
+    await completeJob(harness, jobId);
+
+    // Cannot cancel a completed job
+    const response = await harness.call('DELETE', `/api/providers/import-cancel/${jobId}`);
+    expect(response.status).toBe(400);
+
+    // Completed provider still exists
+    const provider = await harness.call('GET', `/api/providers/${providerId}`);
+    expect(provider.status).toBe(200);
+  });
+
+  it('cannot cancel an unknown job', async () => {
+    const { harness } = setup();
+    await register(harness, 'cancel-unknown@example.com');
+
+    const response = await harness.call('DELETE', '/api/providers/import-cancel/unknown-job');
+    expect(response.status).toBe(404);
+  });
+
+  it('expired jobs are cleaned up safely', async () => {
+    const { harness, repository } = setup();
+    const userId = await register(harness, 'cancel-expired@example.com');
+
+    // Create two jobs, expire one
+    const { jobId: activeJobId } = await initJob(harness, 1, 1);
+    const { jobId: expiredJobId, providerId: expiredProviderId } = await initJob(harness, 1, 1);
+
+    const expiredJob = repository.importJobs.get(expiredJobId);
+    if (expiredJob) {
+      expiredJob.expiresAt = 1;
+      repository.importJobs.set(expiredJobId, expiredJob);
+    }
+
+    // Run cleanup
+    const cleaned = await repository.cleanupExpiredImportJobs(userId, 1_700_000_000);
+    expect(cleaned).toBe(1);
+
+    // Expired job is gone
+    const expiredJobAfter = await repository.getImportJob(userId, expiredJobId, 1_700_000_000);
+    expect(expiredJobAfter).toBeNull();
+
+    // Expired provider is gone
+    const expiredProvider = await repository.find(userId, expiredProviderId);
+    expect(expiredProvider).toBeNull();
+
+    // Active job is untouched
+    const activeJob = await repository.getImportJob(userId, activeJobId, 1_700_000_000);
+    expect(activeJob).not.toBeNull();
+  });
+
+  it('existing chunked import still succeeds after cancel tests', async () => {
+    const { harness } = setup();
+    await register(harness, 'cancel-success@example.com');
+
+    const { jobId } = await initJob(harness, 2, 1);
+    await submitChunk(harness, jobId, 0, [makeEntry(0), makeEntry(1)]);
+    const provider = await completeJob(harness, jobId);
+    expect(provider!.provider.id).toBeDefined();
+    expect(provider!.provider.name).toBe('Test Playlist');
+  });
 });

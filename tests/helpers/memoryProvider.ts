@@ -88,11 +88,44 @@ export class MemoryProviderRepository implements ProviderRepository {
         ...provider,
         lastRefreshAt: now,
         status: 'active',
-        metadata: {},
+        metadata: { lastImport: stats },
       });
     }
     this.imports.set(providerId, stats);
     return 'playlist-id';
+  }
+
+  async cancelImportJob(
+    _userId: string,
+    jobId: string,
+    _now: number,
+  ) {
+    const job = this.importJobs.get(jobId);
+    if (!job || job.userId !== _userId) return false;
+    if (job.status === 'completed') return false;
+
+    // Delete catalogue entries for the provider
+    this.catalog.delete(job.providerId);
+    this.categories.delete(job.providerId);
+
+    // Delete the import job
+    this.importJobs.delete(jobId);
+
+    // Delete the provider
+    return this.providers.delete(this.key(_userId, job.providerId));
+  }
+
+  async cleanupExpiredImportJobs(_userId: string, now: number) {
+    const expiredJobIds = [...this.importJobs.values()]
+      .filter((job) => job.userId === _userId && job.expiresAt <= now && job.status !== 'completed')
+      .map((job) => job.id);
+
+    let cleaned = 0;
+    for (const jobId of expiredJobIds) {
+      const cancelled = await this.cancelImportJob(_userId, jobId, now);
+      if (cancelled) cleaned += 1;
+    }
+    return cleaned;
   }
 
   async createImportJob(
