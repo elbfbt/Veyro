@@ -86,7 +86,7 @@ export interface ImportChunkInput {
 
 /** Initialize a chunked import job. Returns the job id and pre-created provider id. */
 export async function importInit(input: ImportInitInput): Promise<{ jobId: string; providerId: string }> {
-  return apiRequest('/api/providers/import-init', {
+  return apiRequest('/providers/import-init', {
     method: 'POST',
     body: JSON.stringify(input),
   });
@@ -98,7 +98,7 @@ export async function importChunk(
   input: ImportChunkInput,
   options: { signal?: AbortSignal } = {},
 ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }> {
-  return apiRequest(`/api/providers/import-chunk/${jobId}`, {
+  return apiRequest(`/providers/import-chunk/${jobId}`, {
     method: 'POST',
     body: JSON.stringify(input),
     ...(options.signal ? { signal: options.signal } : {}),
@@ -117,19 +117,19 @@ export async function getImportProgress(jobId: string): Promise<{
   error: string | null;
   providerId: string;
 }> {
-  return apiRequest(`/api/providers/import/${jobId}/progress`);
+  return apiRequest(`/providers/import/${jobId}/progress`);
 }
 
 /** Mark an import job complete and return the provider. */
 export async function importComplete(jobId: string): Promise<{ provider: { id: string; name: string } }> {
-  return apiRequest(`/api/providers/import-complete/${jobId}`, {
+  return apiRequest(`/providers/import-complete/${jobId}`, {
     method: 'POST',
   });
 }
 
 /** Cancel an active chunked import job on the server. */
 export async function importCancel(jobId: string): Promise<void> {
-  await apiRequest(`/api/providers/import-cancel/${jobId}`, {
+  await apiRequest(`/providers/import-cancel/${jobId}`, {
     method: 'DELETE',
   });
 }
