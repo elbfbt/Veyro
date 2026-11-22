@@ -224,3 +224,14 @@ export interface ProviderRepository {
     expectedLastProcessedChunk?: number,
   ): Promise<boolean>;
 }
+
+/**
+ * Minimal structural type for scheduling background work on the Worker's
+ * request execution context. Cloudflare's ExecutionContext satisfies this
+ * interface via its waitUntil method. Defined here (rather than importing
+ * cloudflare types) so the service/API layer stays free of Cloudflare-specific
+ * dependencies and remains unit-testable.
+ */
+export interface BackgroundTaskScheduler {
+  waitUntil(promise: Promise<unknown>): void;
+}

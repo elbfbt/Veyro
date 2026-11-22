@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthService } from '../worker/services/auth/service';
 import { ProviderCredentialCipher } from '../worker/services/iptv/credentials';
 import { createBoundedTextFetcher } from '../worker/services/iptv/fetchPlaylist';
+import type { BackgroundTaskScheduler } from '../worker/services/iptv/providerApi';
 import { ProviderService } from '../worker/services/iptv/providerService';
 import { XtreamClient } from '../worker/services/iptv/xtreamClient';
 import { createHarness } from './helpers/apiHarness';
@@ -486,5 +487,110 @@ describe('Xtream failure handling', () => {
     // Other user cannot access the auto-imported provider
     expect((await other.call('GET', `/api/providers/${providerId}`)).status).toBe(404);
     expect((await other.call('DELETE', `/api/providers/${providerId}`)).status).toBe(404);
+  });
+
+  /* ── Xtream background refresh on creation ─────────────────── */
+
+  it('Xtream creation returns promptly without waiting for catalogue import', async () => {
+    const { harness, calls, repository } = setup();
+    await register(harness, 'xtream-bg@example.com');
+
+    const backgroundPromises: Promise<unknown>[] = [];
+    const scheduler: BackgroundTaskScheduler = {
+      waitUntil: (promise: Promise<unknown>) => backgroundPromises.push(promise),
+    };
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Background Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    }, { scheduler });
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is refreshing, not active — import runs in background
+    expect(body.provider.status).toBe('refreshing');
+    expect(body.provider.importing).toBe(false);
+
+    // Background task was scheduled
+    expect(backgroundPromises).toHaveLength(1);
+
+    // Await the background import to completion (microtasks run)
+    await backgroundPromises[0];
+
+    // After background import completes, Xtream API calls were made
+    expect(calls.length).toBeGreaterThan(0);
+    for (const url of calls) {
+      expect(url.origin).toBe(SERVER);
+      expect(url.searchParams.get('username')).toBe('viewer');
+      expect(url.searchParams.get('password')).toBe(PASSWORD);
+    }
+
+    // Provider is active and catalogue populated
+    const stored = repository.catalog.get(body.provider.id);
+    expect(stored).toBeDefined();
+    expect(stored!.length).toBeGreaterThan(0);
+
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('active');
+  });
+
+  it('Xtream background refresh failure leaves provider retryable with error state', async () => {
+    const { harness, setResponder, calls } = setup();
+    await register(harness, 'xtream-bg-fail@example.com');
+
+    // Make the upstream return 401 so auto-import fails
+    setResponder(() => new Response('unauthorized', { status: 401 }));
+
+    const backgroundPromises: Promise<unknown>[] = [];
+    const scheduler: BackgroundTaskScheduler = {
+      waitUntil: (promise: Promise<unknown>) => backgroundPromises.push(promise),
+    };
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Background Failing Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    }, { scheduler });
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is refreshing immediately (not waiting for import)
+    expect(body.provider.status).toBe('refreshing');
+    expect(backgroundPromises).toHaveLength(1);
+
+    // Await the background import — it resolves because refresh() catches errors
+    await backgroundPromises[0];
+
+    // After background import completes, Xtream API calls were made
+    expect(calls.length).toBeGreaterThan(0);
+
+    // Provider is now in error state, retryable
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('error');
+    expect(imported.lastError).toContain('authentication');
+
+    // Retry via refresh succeeds with good credentials
+    setResponder((url) => catalogue(url.searchParams.get('action') ?? '', url.searchParams.get('series_id') ?? undefined));
+    const refreshed = await harness.call('POST', `/api/providers/${body.provider.id}/refresh`);
+    expect(refreshed.status).toBe(200);
+
+    // Provider is now active
+    const listResp2 = await harness.call('GET', '/api/providers');
+    const listBody2 = await listResp2.json();
+    const active = listBody2.providers.find((p: { id: string }) => p.id === body.provider.id);
+    expect(active!.status).toBe('active');
   });
 });

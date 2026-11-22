@@ -4,6 +4,7 @@ import { ProviderError, isProviderError } from './providerService';
 import { UnsafeUrlError } from './urlSafety';
 import { XtreamClientError } from './xtreamClient';
 import type {
+  BackgroundTaskScheduler,
   ConnectionTestResult,
   ImportProgress,
   ImportStats,
@@ -12,6 +13,7 @@ import type {
   UpdateProviderInput,
   CreateProviderInput,
 } from './types';
+export type { BackgroundTaskScheduler };
 
 const JSON_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
@@ -26,7 +28,11 @@ function json(body: unknown, status = 200): Response {
 export interface ProviderApiService {
   list(userId: string): Promise<ProviderView[]>;
   get(userId: string, id: string): Promise<ProviderView>;
-  create(userId: string, input: CreateProviderInput): Promise<ProviderView>;
+  create(
+    userId: string,
+    input: CreateProviderInput,
+    scheduler?: BackgroundTaskScheduler,
+  ): Promise<ProviderView>;
   update(userId: string, id: string, input: UpdateProviderInput): Promise<ProviderView>;
   remove(userId: string, id: string): Promise<void>;
   setDefault(userId: string, id: string): Promise<ProviderView>;
@@ -210,6 +216,7 @@ export async function handleProviderApi(
   url: URL,
   userId: string,
   service: ProviderApiService,
+  scheduler?: BackgroundTaskScheduler,
 ): Promise<Response | null> {
   if (!url.pathname.startsWith('/api/providers')) return null;
   const method = request.method.toUpperCase();
@@ -217,7 +224,11 @@ export async function handleProviderApi(
   try {
     if (url.pathname === '/api/providers') {
       if (method === 'GET') return json({ providers: await service.list(userId) });
-      if (method === 'POST') return json({ provider: await service.create(userId, createInput(await readJson(request))) }, 201);
+      if (method === 'POST')
+        return json(
+          { provider: await service.create(userId, createInput(await readJson(request)), scheduler) },
+          201,
+        );
       return null;
     }
 

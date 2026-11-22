@@ -31,7 +31,7 @@ export interface Env {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
@@ -60,7 +60,7 @@ export default {
         providers,
         content,
       });
-      return handleApi(request, url);
+      return handleApi(request, url, ctx);
     }
 
     // Static assets are normally served before the Worker runs; this fallback

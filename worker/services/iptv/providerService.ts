@@ -5,6 +5,7 @@ import { parseM3u, PlaylistLimitError, DEFAULT_MAX_PLAYLIST_BYTES, DEFAULT_MAX_P
 import { UnsafeUrlError, assertSafePublicUrl } from './urlSafety';
 import { XtreamClient, XtreamClientError } from './xtreamClient';
 import type {
+  BackgroundTaskScheduler,
   ConnectionTestResult,
   CreateProviderInput,
   ImportProgress,
@@ -142,7 +143,11 @@ export class ProviderService {
     return toView(await this.owned(userId, id));
   }
 
-  async create(userId: string, input: CreateProviderInput): Promise<ProviderView> {
+  async create(
+    userId: string,
+    input: CreateProviderInput,
+    scheduler?: BackgroundTaskScheduler,
+  ): Promise<ProviderView> {
     const type = providerType(input.type);
     const name = validName(input.name);
     const now = this.clock.now();
@@ -195,16 +200,24 @@ export class ProviderService {
     // Trigger the initial catalogue import for remote providers. Reuses the
     // existing refresh() pipeline — no duplicated import logic. If the import
     // fails, refresh() already sets status to 'error' with lastError, and the
-    // provider is preserved so the user can retry. We await it so the response
-    // reflects the true import outcome; if the Worker times out, the provider
-    // already exists in D1 with 'refreshing' status and can be retried via
-    // the existing Refresh endpoint.
+    // provider is preserved so the user can retry.
+    //
+    // When a request execution context (scheduler) is available, the import is
+    // scheduled via waitUntil so the response returns promptly without waiting
+    // for the remote fetch/parse/write to complete. Cloudflare Workers
+    // guarantees waitUntil promises run to completion even after the response
+    // is sent. When no scheduler is available (e.g. tests), fall back to
+    // synchronous import so behaviour is unchanged.
     if (isRemoteType) {
-      try {
-        await this.refresh(userId, provider.id);
-      } catch {
-        // Import failed — provider is preserved in 'error' state with
-        // lastError set by refresh(). Fall through to return the current view.
+      const refreshPromise = this.refresh(userId, provider.id).catch(() => {
+        // Errors are already handled inside refresh(): provider is left in
+        // 'error' state with lastError set. Suppress the rejection so
+        // waitUntil does not surface an unhandled rejection.
+      });
+      if (scheduler) {
+        scheduler.waitUntil(refreshPromise);
+      } else {
+        await refreshPromise;
       }
     }
 

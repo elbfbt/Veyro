@@ -13,7 +13,11 @@ import {
   serializeCookie,
 } from './http/cookies';
 import { isAllowedOrigin, isCsrfRequestValid, newCsrfToken } from './http/csrf';
-import { handleProviderApi, type ProviderApiService } from './services/iptv/providerApi';
+import {
+  handleProviderApi,
+  type BackgroundTaskScheduler,
+  type ProviderApiService,
+} from './services/iptv/providerApi';
 import { handleContentApi, type ContentApiService } from './services/content/api';
 
 export interface ApiDependencies {
@@ -151,7 +155,11 @@ function ensureCsrfToken(request: Request, headers: Headers, url: URL): string {
 }
 
 export function createApiHandler(dependencies: ApiDependencies) {
-  return async function handleApi(request: Request, url: URL): Promise<Response> {
+  return async function handleApi(
+    request: Request,
+    url: URL,
+    ctx?: BackgroundTaskScheduler,
+  ): Promise<Response> {
     try {
       const path = url.pathname;
       const method = request.method.toUpperCase();
@@ -254,7 +262,13 @@ export function createApiHandler(dependencies: ApiDependencies) {
       if (!context) throw new AuthError('authentication_required', 'Sign in to continue.');
 
       if (dependencies.providers) {
-        const providerResponse = await handleProviderApi(request, url, context.user.id, dependencies.providers);
+        const providerResponse = await handleProviderApi(
+          request,
+          url,
+          context.user.id,
+          dependencies.providers,
+          ctx,
+        );
         if (providerResponse) return providerResponse;
       }
 
