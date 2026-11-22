@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthService } from '../worker/services/auth/service';
 import { ProviderCredentialCipher } from '../worker/services/iptv/credentials';
-import { PlaylistFetchError } from '../worker/services/iptv/fetchPlaylist';
+import { PlaylistFetchError, UpstreamHttpError } from '../worker/services/iptv/fetchPlaylist';
 import type { BackgroundTaskScheduler } from '../worker/services/iptv/providerApi';
 import { ProviderService } from '../worker/services/iptv/providerService';
 import { createHarness } from './helpers/apiHarness';
@@ -414,5 +414,79 @@ https://stream.test/bbc.m3u8
     const listBody2 = await listResp2.json();
     const active = listBody2.providers.find((p: { id: string }) => p.id === body.provider.id);
     expect(active!.status).toBe('active');
+  });
+
+  /* ── UpstreamHttpError handling on M3U URL refresh ─────────────── */
+
+  it('M3U URL refresh returning HTTP 200 with valid M3U still succeeds', async () => {
+    const { harness, repository } = setup();
+    await register(harness, 'url-200@example.com');
+
+    const provider = await createUrlProvider(harness);
+
+    const refreshed = await harness.call('POST', `/api/providers/${provider.id}/refresh`);
+    expect(refreshed.status).toBe(200);
+    const stats = await refreshed.json();
+    expect(stats.added).toBe(1);
+    expect(repository.catalog.get(provider.id)?.[0]?.name).toBe('CNN');
+  });
+
+  it('M3U URL refresh returning HTTP 404 yields 502 upstream_http_error', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-404@example.com');
+
+    const provider = await createUrlProvider(harness);
+
+    // Simulate upstream returning 404
+    fetchPlaylist.mockRejectedValueOnce(new UpstreamHttpError(404));
+
+    const refreshed = await harness.call('POST', `/api/providers/${provider.id}/refresh`);
+    expect(refreshed.status).toBe(502);
+    const body = await refreshed.json();
+    expect(body.error).toBe('upstream_http_error');
+    expect(body.message).toContain('404');
+    // Upstream URL must not be leaked
+    expect(body.message).not.toContain('provider.example.com');
+    expect(body.message).not.toContain('playlist.m3u8');
+    expect(body.message).not.toContain('http');
+  });
+
+  it('M3U URL refresh returning HTTP 403 yields 502 upstream_http_error', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-403@example.com');
+
+    const provider = await createUrlProvider(harness);
+
+    // Simulate upstream returning 403
+    fetchPlaylist.mockRejectedValueOnce(new UpstreamHttpError(403));
+
+    const refreshed = await harness.call('POST', `/api/providers/${provider.id}/refresh`);
+    expect(refreshed.status).toBe(502);
+    const body = await refreshed.json();
+    expect(body.error).toBe('upstream_http_error');
+    expect(body.message).toContain('403');
+    // Upstream URL must not be leaked
+    expect(body.message).not.toContain('provider.example.com');
+    expect(body.message).not.toContain('playlist.m3u8');
+    expect(body.message).not.toContain('http');
+  });
+
+  it('M3U URL refresh returning HTTP 500 yields 502 upstream_http_error', async () => {
+    const { harness, fetchPlaylist } = setup();
+    await register(harness, 'url-500@example.com');
+
+    const provider = await createUrlProvider(harness);
+
+    // Simulate upstream returning 500
+    fetchPlaylist.mockRejectedValueOnce(new UpstreamHttpError(500));
+
+    const refreshed = await harness.call('POST', `/api/providers/${provider.id}/refresh`);
+    expect(refreshed.status).toBe(502);
+    const body = await refreshed.json();
+    expect(body.error).toBe('upstream_http_error');
+    expect(body.message).toContain('500');
+    // Upstream URL must not be leaked
+    expect(body.message).not.toContain('provider.example.com');
+    expect(body.message).not.toContain('playlist.m3u8');
   });
 });
