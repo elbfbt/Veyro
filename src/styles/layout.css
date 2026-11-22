@@ -265,6 +265,12 @@
     padding-inline: 0;
   }
 
+
+  /* Drawer swipe-to-dismiss: horizontal drags only, vertical scroll wins. */
+  .sidebar.is-dragging {
+    transition: none;
+  }
+
   /* Top bar -------------------------------------------------------------- */
   .topbar {
     position: sticky;
@@ -395,6 +401,10 @@
 
     .sidebar--open {
       transform: translateX(0);
+    }
+
+    .sidebar {
+      touch-action: pan-y;
     }
 
     .sidebar--collapsed .sidebar__top {

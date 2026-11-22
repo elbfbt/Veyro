@@ -944,6 +944,7 @@ export function PlayerPage() {
                     className="icon-button"
                     onClick={handleTogglePlay}
                     aria-label={isPaused ? 'Play' : 'Pause'}
+                    title={`${isPaused ? 'Play' : 'Pause'} (Space)`}
                     data-testid="player-btn-play"
                   >
                     {isPaused ? <Play size={20} /> : <Pause size={20} />}
@@ -961,6 +962,7 @@ export function PlayerPage() {
                         onChange={(event) => handleSeek(Number(event.target.value))}
                         className="player-progress-input"
                         data-testid="player-progress"
+                        aria-label="Seek (← → skips 10 seconds)"
                         disabled={!isSeekable}
                       />
                       <span className="player-time">{formatTime(duration)}</span>
@@ -972,6 +974,7 @@ export function PlayerPage() {
                     className="icon-button"
                     onClick={handleToggleMute}
                     aria-label={isMuted ? 'Unmute' : 'Mute'}
+                    title={`${isMuted ? 'Unmute' : 'Mute'} (M)`}
                     data-testid="player-btn-mute"
                   >
                     {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
@@ -1007,6 +1010,7 @@ export function PlayerPage() {
                       className="icon-button"
                       onClick={handleToggleFullscreen}
                       aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                      title={`${isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} (F)`}
                       data-testid="player-btn-fullscreen"
                     >
                       {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}

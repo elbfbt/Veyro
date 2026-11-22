@@ -220,6 +220,43 @@
   }
 
   /* Settings ------------------------------------------------------------- */
+
+  .settings-advanced {
+    border-top: 1px solid var(--border);
+  }
+
+  .settings-advanced > summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--hit-size);
+    padding: 0 18px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-weight: 650;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .settings-advanced > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .settings-advanced > summary::after {
+    margin-left: auto;
+    content: '▾';
+    transition: transform var(--dur-base) var(--ease);
+  }
+
+  .settings-advanced[open] > summary::after {
+    transform: rotate(180deg);
+  }
+
+  .setting-row__value {
+    color: var(--text-subtle);
+    font-size: 0.8rem;
+  }
+
   .settings-section {
     margin-bottom: 34px;
   }

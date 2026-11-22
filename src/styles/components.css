@@ -577,6 +577,158 @@
     background: var(--scrim-control);
   }
 
+
+  /* Command menu (Ctrl/Cmd+K) -------------------------------------------- */
+  .command-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: min(12vh, 120px) var(--space-4) var(--space-4);
+    background: var(--scrim);
+    backdrop-filter: blur(6px);
+    animation: fade-in var(--dur-base) var(--ease);
+  }
+
+  .command-panel {
+    display: flex;
+    flex-direction: column;
+    width: min(600px, 100%);
+    max-height: min(70svh, 560px);
+    overflow: hidden;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    transform-origin: top center;
+    animation: pop-in var(--dur-base) var(--ease);
+  }
+
+  .command-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex: 0 0 auto;
+    padding: 0 var(--space-4);
+    color: var(--text-subtle);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .command-search input {
+    flex: 1;
+    min-width: 0;
+    min-height: 56px;
+    color: var(--text);
+    background: transparent;
+    border: 0;
+    font-size: 1rem;
+    outline: none;
+  }
+
+  .command-panel kbd {
+    padding: 2px 6px;
+    color: var(--text-subtle);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+  }
+
+  .command-list {
+    margin: 0;
+    padding: var(--space-2);
+    overflow-y: auto;
+  }
+
+  .command-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: var(--hit-size);
+    padding: 0 var(--space-3);
+    color: var(--text);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    text-align: left;
+  }
+
+  .command-item.is-active {
+    background: var(--accent-soft);
+  }
+
+  .command-item__label {
+    font-weight: 600;
+  }
+
+  .command-item__detail {
+    margin-left: auto;
+    color: var(--text-subtle);
+    font-size: 0.75rem;
+  }
+
+  .command-empty {
+    padding: var(--space-5);
+    margin: 0;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  .command-hint {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    flex: 0 0 auto;
+    padding: var(--space-3) var(--space-4);
+    margin: 0;
+    color: var(--text-subtle);
+    border-top: 1px solid var(--border);
+    font-size: 0.72rem;
+  }
+
+  .command-hint span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* Popovers grow from scale(0.95) at the trigger, never from the centre. */
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  @media (max-width: 599px) {
+    .command-scrim {
+      padding-top: 0;
+    }
+
+    .command-panel {
+      width: 100%;
+      max-height: 100svh;
+      border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    }
+  }
+
   /* Connect banner ------------------------------------------------------- */
   .connect-banner {
     position: relative;

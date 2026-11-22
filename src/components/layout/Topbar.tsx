@@ -88,7 +88,7 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
           placeholder="Search channels, movies, shows..."
           aria-label="Search Veyro"
         />
-        <kbd aria-hidden="true" title="Press / to focus search">
+        <kbd aria-hidden="true" title="Press / to focus search · Ctrl+K for commands">
           /
         </kbd>
       </form>
