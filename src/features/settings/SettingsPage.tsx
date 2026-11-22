@@ -89,33 +89,29 @@ export function SettingsPage() {
             checked={preferences.tvMode}
             onChange={(value) => update('tvMode', value)}
           />
-          <SelectRow
-            label="Density"
-            description="How much information fits on screen."
-            value="density"
-            options={[
-              { label: 'Comfortable', value: 'comfortable' },
-              { label: 'Compact', value: 'compact' },
-            ]}
-            onChange={update}
-          />
-          <SelectRow
-            label="Motion"
-            description="Respect reduced-motion preferences."
-            value="motion"
-            options={[
-              { label: 'Full', value: 'full' },
-              { label: 'Reduced', value: 'reduced' },
-            ]}
-            onChange={update}
-          />
-          <SelectRow
-            label="Language"
-            description="Localization placeholder; translation is planned."
-            value="language"
-            options={[{ label: 'English', value: 'en' }]}
-            onChange={update}
-          />
+          <details className="settings-advanced">
+            <summary>Advanced interface options</summary>
+            <SelectRow
+              label="Density"
+              description="How much information fits on screen."
+              value="density"
+              options={[
+                { label: 'Comfortable', value: 'comfortable' },
+                { label: 'Compact', value: 'compact' },
+              ]}
+              onChange={update}
+            />
+            <SelectRow
+              label="Motion"
+              description="Respect reduced-motion preferences."
+              value="motion"
+              options={[
+                { label: 'Full', value: 'full' },
+                { label: 'Reduced', value: 'reduced' },
+              ]}
+              onChange={update}
+            />
+          </details>
         </div>
       </section>
 
@@ -140,28 +136,31 @@ export function SettingsPage() {
             ]}
             onChange={update}
           />
-          <SelectRow
-            label="Fallback player"
-            value="fallbackPlayer"
-            options={[
-              { label: 'Auto', value: 'auto' },
-              { label: 'Native HTML5', value: 'native' },
-              { label: 'HLS.js', value: 'hls' },
-            ]}
-            onChange={update}
-          />
           <Toggle
             label="Autoplay"
             description="Start playback when a title is opened."
             checked={preferences.autoplay}
             onChange={(value) => update('autoplay', value)}
           />
-          <Toggle
-            label="Auto reconnect"
-            description="Recover stalled streams with capped exponential backoff."
-            checked={preferences.autoReconnect}
-            onChange={(value) => update('autoReconnect', value)}
-          />
+          <details className="settings-advanced">
+            <summary>Advanced playback</summary>
+            <SelectRow
+              label="Fallback player"
+              value="fallbackPlayer"
+              options={[
+                { label: 'Auto', value: 'auto' },
+                { label: 'Native HTML5', value: 'native' },
+                { label: 'HLS.js', value: 'hls' },
+              ]}
+              onChange={update}
+            />
+            <Toggle
+              label="Auto reconnect"
+              description="Recover stalled streams with capped exponential backoff."
+              checked={preferences.autoReconnect}
+              onChange={(value) => update('autoReconnect', value)}
+            />
+          </details>
         </div>
       </section>
 
@@ -190,7 +189,7 @@ export function SettingsPage() {
               <strong><ShieldCheck size={16} /> Privacy</strong>
               <small>Streams play directly from your provider. Veyro never relays video traffic.</small>
             </span>
-            <span className="badge badge--neutral">Direct playback</span>
+            <span className="setting-row__value">Direct playback</span>
           </div>
         </div>
       </section>

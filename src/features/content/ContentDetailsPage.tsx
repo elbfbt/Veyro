@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ContentDetail } from '../../components/content/ContentDetail';
-import { CatalogEmpty, CatalogError } from '../../components/content/CatalogStates';
+import { CatalogEmpty, CatalogError, DetailSkeleton } from '../../components/content/CatalogStates';
 import { errorMessage } from '../../hooks/useCatalog';
 import { getChannel, getEpisode, getMovie, getSeries } from '../../lib/contentApi';
 import type { ChannelItem, ContentKind, EpisodeItem, MovieItem, SeriesItem } from '../../types/content';
@@ -105,7 +105,7 @@ export function ContentDetailsPage() {
 
   const retry = useCallback(() => setReloadKey((key) => key + 1), []);
 
-  if (loading) return <div className="inner-page"><p className="provider-message">Loading details…</p></div>;
+  if (loading) return <DetailSkeleton />;
   if (error) return <div className="inner-page"><CatalogError message={error} onRetry={retry} /></div>;
   if (!item || !isContentKind(kind)) {
     return (

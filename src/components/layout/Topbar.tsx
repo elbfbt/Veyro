@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Bell, Menu, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Menu, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import { Logo } from '../../brand/Logo';
 import { useAuth } from '../../state/AuthContext';
 
@@ -12,9 +12,11 @@ interface TopbarProps {
 
 export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: TopbarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { status, user } = useAuth();
   const [query, setQuery] = useState('');
   const [scrolled, setScrolled] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -22,6 +24,25 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
+
+  /*
+   * The `/` hint in the search field is a real shortcut everywhere except the
+   * dedicated search page, which owns its own input.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (location.pathname === '/search') return;
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '')) {
+        return;
+      }
+      event.preventDefault();
+      searchInput.current?.focus();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [location.pathname]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -37,6 +58,7 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
           className="icon-button topbar__menu"
           onClick={onOpenDrawer}
           aria-label="Open navigation"
+          title="Navigation"
         >
           <Menu size={22} />
         </button>
@@ -46,6 +68,7 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
           onClick={onToggleSidebar}
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-pressed={sidebarCollapsed}
+          title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (Ctrl+\\)`}
           data-spatial="topbar-sidebar-toggle"
         >
           {sidebarCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
@@ -58,25 +81,19 @@ export function Topbar({ sidebarCollapsed, onToggleSidebar, onOpenDrawer }: Topb
       <form className="topbar__search" role="search" onSubmit={submit}>
         <Search size={18} aria-hidden="true" />
         <input
+          ref={searchInput}
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search channels, movies, shows..."
           aria-label="Search Veyro"
         />
-        <kbd aria-hidden="true">/</kbd>
+        <kbd aria-hidden="true" title="Press / to focus search · Ctrl+K for commands">
+          /
+        </kbd>
       </form>
 
       <div className="topbar__actions">
-        <button
-          type="button"
-          className="icon-button icon-button--muted"
-          disabled
-          title="Notifications are planned for a later phase"
-          aria-label="Notifications, planned for a later phase"
-        >
-          <Bell size={19} />
-        </button>
         {status === 'authenticated' && user ? (
           <Link
             to="/profile"

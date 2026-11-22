@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { ContentCard } from '../../components/content/ContentCard';
-import { CatalogEmpty, CatalogError, CatalogSkeleton } from '../../components/content/CatalogStates';
+import {
+  CatalogEmpty,
+  CatalogError,
+  CatalogSkeleton,
+  HeroSkeleton,
+} from '../../components/content/CatalogStates';
+import { HomeHero } from '../../components/home/HomeHero';
 import { errorMessage } from '../../hooks/useCatalog';
 import { listChannels, listMovies, listMyProviders, listSeries } from '../../lib/contentApi';
 import { useAuth } from '../../state/AuthContext';
@@ -14,6 +20,7 @@ export function HomePage() {
   const [channels, setChannels] = useState<ChannelItem[]>([]);
   const [movies, setMovies] = useState<MovieItem[]>([]);
   const [series, setSeries] = useState<SeriesItem[]>([]);
+  const [totals, setTotals] = useState({ channels: 0, movies: 0, series: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -39,6 +46,11 @@ export function HomePage() {
         setChannels(channelResult.channels);
         setMovies(movieResult.movies);
         setSeries(seriesResult.series);
+        setTotals({
+          channels: channelResult.pagination.total,
+          movies: movieResult.pagination.total,
+          series: seriesResult.pagination.total,
+        });
         setLoading(false);
       })
       .catch((caught) => {
@@ -67,7 +79,14 @@ export function HomePage() {
   }
 
   if (loading) {
-    return <div className="home-page home-empty"><CatalogSkeleton count={8} /></div>;
+    return (
+      <div className="home-page">
+        <HeroSkeleton />
+        <div className="home-empty">
+          <CatalogSkeleton count={8} />
+        </div>
+      </div>
+    );
   }
 
   if (error) {
@@ -87,6 +106,13 @@ export function HomePage() {
     );
   }
 
+  const total = totals.channels + totals.movies + totals.series;
+  const providerLabel = `${providers.length} ${providers.length === 1 ? 'provider' : 'providers'}`;
+  const featured = movies[0]
+    ? { kind: 'movie' as const, item: movies[0] }
+    : series[0]
+      ? { kind: 'series' as const, item: series[0] }
+      : null;
   const rows = [
     { id: 'channels', title: 'Live TV', to: '/live', items: channels, kind: 'channel' as const },
     { id: 'movies', title: 'Recently added movies', to: '/movies', items: movies, kind: 'movie' as const },
@@ -95,16 +121,13 @@ export function HomePage() {
 
   return (
     <div className="home-page">
-      <section className="home-intro">
-        <p className="eyebrow"><Sparkles size={14} /> Your catalogue</p>
-        <h1>Welcome back</h1>
-        <p>{providers.length} connected {providers.length === 1 ? 'provider' : 'providers'} · browse what you imported.</p>
-        <div className="home-provider-list" aria-label="Your providers">
-          {providers.map((provider) => (
-            <span className="badge badge--neutral" key={provider.id}>{provider.name}</span>
-          ))}
-        </div>
-      </section>
+      {featured && <HomeHero item={featured.item} kind={featured.kind} />}
+
+      <p className="home-totals tnum">
+        {total.toLocaleString('en-US')} titles from {providerLabel} ·{' '}
+        {totals.channels.toLocaleString('en-US')} live · {totals.movies.toLocaleString('en-US')} movies ·{' '}
+        {totals.series.toLocaleString('en-US')} series
+      </p>
 
       {rows.filter((row) => row.items.length > 0).length === 0 ? (
         <div className="home-empty">
@@ -126,17 +149,18 @@ export function HomePage() {
               </div>
               <div className="content-row__scroller">
                 {row.items.map((item, index) => (
-                  <ContentCard key={item.id} item={item} kind={row.kind} spatialId={`home-${row.id}-${index}`} />
+                  <ContentCard
+                    key={item.id}
+                    item={item}
+                    kind={row.kind}
+                    index={index}
+                    spatialId={`home-${row.id}-${index}`}
+                  />
                 ))}
               </div>
             </section>
           ))
       )}
-
-      <footer className="page-footer">
-        <span>VEYRO · Your sources, your catalogue</span>
-        <span>Playback is added in Phase 5. No video is relayed through Veyro.</span>
-      </footer>
     </div>
   );
 }

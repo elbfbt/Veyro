@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { brand } from '../../brand/config';
@@ -9,6 +10,9 @@ interface SidebarProps {
   drawerOpen: boolean;
   onToggleCollapse: () => void;
   onCloseDrawer: () => void;
+  sidebarRef?: RefObject<HTMLElement>;
+  dragOffset?: number;
+  dragging?: boolean;
 }
 
 export function Sidebar({
@@ -16,11 +20,18 @@ export function Sidebar({
   drawerOpen,
   onToggleCollapse,
   onCloseDrawer,
+  sidebarRef,
+  dragOffset = 0,
+  dragging = false,
 }: SidebarProps) {
   return (
     <aside
       id="primary-sidebar"
-      className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}${drawerOpen ? ' sidebar--open' : ''}`}
+      ref={sidebarRef}
+      className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}${drawerOpen ? ' sidebar--open' : ''}${
+        dragging ? ' is-dragging' : ''
+      }`}
+      style={dragOffset !== 0 ? { transform: `translateX(${dragOffset}px)` } : undefined}
       aria-label="Primary navigation"
     >
       <div className="sidebar__top">
@@ -85,6 +96,7 @@ export function Sidebar({
           onClick={onToggleCollapse}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-pressed={collapsed}
+          title={`${collapsed ? 'Expand' : 'Collapse'} sidebar (Ctrl+\\)`}
           data-spatial="sidebar-toggle"
         >
           {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}

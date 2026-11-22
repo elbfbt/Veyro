@@ -12,7 +12,7 @@ export function LivePage() {
     <CatalogBrowsePage
       eyebrow="Live television"
       title="Live TV"
-      description="Browse the channels imported from your providers. Playback arrives in the next phase."
+      description="Browse the channels imported from your providers."
       kind="channel"
       facetType="channel"
       emptyTitle="No live channels found."

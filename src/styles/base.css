@@ -8,17 +8,19 @@
   html {
     background: var(--bg);
     scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
     margin: 0;
     min-width: 320px;
+    min-height: 100svh;
     background:
-      radial-gradient(circle at 68% -18%, rgba(124, 92, 255, 0.14), transparent 42%),
-      radial-gradient(circle at 8% 20%, rgba(75, 47, 214, 0.08), transparent 38%),
+      radial-gradient(circle at 68% -18%, var(--ambient-accent), transparent 42%),
+      radial-gradient(circle at 8% 20%, var(--ambient-deep), transparent 38%),
       var(--bg);
     color: var(--text);
-    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
     font-size: 15px;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
@@ -35,6 +37,16 @@
   h2,
   h3 {
     line-height: 1.12;
+    text-wrap: balance;
+  }
+
+  h1 {
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
   }
 
   a {
@@ -68,10 +80,34 @@
     list-style: none;
   }
 
+  /* Keyboard focus stays visible everywhere without changing element shape. */
   :focus-visible {
-    outline: none;
-    box-shadow: var(--shadow-focus);
-    border-radius: var(--radius-sm);
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Utilities ------------------------------------------------------------ */
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+  }
+
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   /* Buttons -------------------------------------------------------------- */
@@ -79,8 +115,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 9px;
-    min-height: 44px;
+    gap: var(--space-2);
+    min-height: var(--hit-size);
     padding: 0 20px;
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
@@ -88,24 +124,33 @@
     font-weight: 650;
     letter-spacing: 0.01em;
     white-space: nowrap;
-    transition: transform 180ms var(--ease), background-color 180ms var(--ease), border-color 180ms var(--ease);
+    transition:
+      transform var(--dur-fast) var(--ease),
+      background-color var(--dur-base) var(--ease),
+      border-color var(--dur-base) var(--ease),
+      filter var(--dur-base) var(--ease);
   }
 
-  .button:hover {
-    transform: translateY(-2px);
+  .button:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
-  .button:active {
-    transform: translateY(0);
+  .button:disabled {
+    transform: none;
   }
 
   .button--primary {
-    color: #fff;
-    background: linear-gradient(135deg, var(--brand-accent-light), var(--brand-accent) 62%, var(--brand-accent-deep));
-    box-shadow: 0 10px 30px rgba(124, 92, 255, 0.32);
+    color: var(--on-accent);
+    background: linear-gradient(
+      135deg,
+      var(--brand-accent-light),
+      var(--brand-accent) 62%,
+      var(--brand-accent-deep)
+    );
+    box-shadow: 0 10px 30px var(--accent-glow);
   }
 
-  .button--primary:hover {
+  .button--primary:hover:not(:disabled) {
     filter: brightness(1.09);
   }
 
@@ -116,7 +161,7 @@
     backdrop-filter: blur(12px);
   }
 
-  .button--ghost:hover {
+  .button--ghost:hover:not(:disabled) {
     background: var(--surface-hover);
     border-color: var(--border-strong);
   }
@@ -126,12 +171,13 @@
     background: transparent;
   }
 
-  .button--quiet:hover {
+  .button--quiet:hover:not(:disabled) {
     color: var(--text);
     background: var(--surface);
   }
 
   .icon-button {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -142,13 +188,27 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 50%;
-    transition: color 160ms var(--ease), background-color 160ms var(--ease), transform 160ms var(--ease);
+    transition:
+      color var(--dur-fast) var(--ease),
+      background-color var(--dur-fast) var(--ease),
+      transform var(--dur-fast) var(--ease);
+  }
+
+  /* Invisible hit slop keeps small controls at 44×44 without growing. */
+  .icon-button::after {
+    position: absolute;
+    inset: calc(-1 * var(--hit-slop));
+    content: '';
+    border-radius: var(--radius-pill);
   }
 
   .icon-button:hover:not(:disabled) {
     color: var(--text);
     background: var(--surface-strong);
-    transform: translateY(-1px);
+  }
+
+  .icon-button:active:not(:disabled) {
+    transform: scale(0.94);
   }
 
   .icon-button--small {
@@ -163,11 +223,11 @@
 
   /* Small shared pieces -------------------------------------------------- */
   .eyebrow {
-    margin-bottom: 6px;
+    margin-bottom: var(--space-2);
     color: var(--brand-accent-light);
     font-size: 0.72rem;
     font-weight: 750;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
@@ -176,13 +236,12 @@
     align-items: center;
     min-height: 26px;
     padding: 3px 12px;
-    color: rgba(255, 255, 255, 0.86);
-    background: rgba(255, 255, 255, 0.09);
-    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: var(--on-media);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
     border-radius: var(--radius-pill);
     font-size: 0.73rem;
     font-weight: 600;
-    backdrop-filter: blur(10px);
   }
 
   .badge {
@@ -190,20 +249,21 @@
     align-items: center;
     gap: 6px;
     padding: 4px 9px;
-    background: rgba(10, 10, 16, 0.72);
+    color: var(--on-media);
+    background: var(--scrim-control);
     border: 1px solid var(--border);
-    border-radius: 7px;
-    font-size: 0.66rem;
-    font-weight: 750;
-    letter-spacing: 0.08em;
+    border-radius: var(--radius-xs);
+    font-size: 0.68rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    backdrop-filter: blur(8px);
   }
 
   .badge--live {
-    color: #fff;
-    background: rgba(255, 77, 106, 0.18);
-    border-color: rgba(255, 77, 106, 0.45);
+    color: var(--text);
+    background: var(--live-tint);
+    border-color: var(--live-line);
   }
 
   .badge__pulse {
@@ -211,13 +271,15 @@
     height: 6px;
     background: var(--danger);
     border-radius: 50%;
-    box-shadow: 0 0 0 3px rgba(255, 77, 106, 0.2);
-    animation: pulse 2s infinite;
+    box-shadow: 0 0 0 3px var(--live-tint);
+    animation: pulse 2s var(--ease-in-out) infinite;
   }
 
   .badge--neutral {
     color: var(--text-muted);
     background: var(--surface);
+    text-transform: none;
+    letter-spacing: 0;
   }
 
   .result-count {
@@ -227,21 +289,30 @@
     color: var(--text-muted);
     font-size: 0.82rem;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
 
   .skip-link {
     position: fixed;
     top: -100px;
-    left: 16px;
-    z-index: 200;
+    left: var(--space-4);
+    z-index: var(--z-skip);
     padding: 12px 18px;
-    color: #fff;
+    color: var(--on-accent);
     background: var(--brand-accent-deep);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .skip-link:focus {
     top: 12px;
+  }
+
+  /* Native View Transitions: shared artwork morphs card → detail. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: var(--dur-base);
+    animation-timing-function: var(--ease);
   }
 
   @keyframes pulse {
@@ -253,7 +324,7 @@
   @keyframes fade-up {
     from {
       opacity: 0;
-      transform: translateY(14px);
+      transform: translateY(10px);
     }
     to {
       opacity: 1;
@@ -264,11 +335,72 @@
   @keyframes image-in {
     from {
       opacity: 0;
-      transform: scale(1.035);
+      transform: scale(1.02);
     }
     to {
       opacity: 1;
       transform: scale(1);
+    }
+  }
+
+  /* Crossfade for icon swaps (play↔pause, mute↔unmute, favorite). */
+  @keyframes icon-in {
+    from {
+      opacity: 0;
+      filter: blur(2px);
+    }
+    to {
+      opacity: 1;
+      filter: blur(0);
+    }
+  }
+
+  /* Brief confirmation pulse — always paired with a static check state. */
+  @keyframes success-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(94, 234, 146, 0.45);
+    }
+    100% {
+      box-shadow: 0 0 0 10px rgba(94, 234, 146, 0);
+    }
+  }
+
+  /*
+   * Global reduced-motion gate: every new entrance, popover, stagger and
+   * view transition is CSS-driven, so one switch covers the whole app.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --dur-fast: 1ms;
+      --dur-base: 1ms;
+      --dur-slow: 1ms;
+      --dur-exit: 1ms;
+      --stagger: 0ms;
+    }
+
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+
+    /* A loading indicator is functional motion, not decoration. */
+    .spinner {
+      animation-duration: 900ms !important;
+      animation-iteration-count: infinite !important;
+    }
+
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
     }
   }
 }

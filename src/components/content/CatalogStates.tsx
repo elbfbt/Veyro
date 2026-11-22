@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, Inbox, RefreshCw } from 'lucide-react';
 import type { Pagination } from '../../types/content';
@@ -6,10 +7,44 @@ export function CatalogSkeleton({ count = 12 }: { count?: number }) {
   return (
     <div className="media-grid" aria-busy="true" aria-label="Loading catalogue">
       {Array.from({ length: count }, (_, index) => (
-        <div className="media-card media-card--skeleton" key={index} aria-hidden="true">
+        <div
+          className="media-card media-card--skeleton"
+          key={index}
+          style={{ '--stagger-index': Math.min(index, 9) } as CSSProperties}
+          aria-hidden="true"
+        >
           <span className="skeleton-block" />
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Art + copy placeholders keep the details layout from jumping on load. */
+export function DetailSkeleton() {
+  return (
+    <div className="inner-page" aria-busy="true" aria-label="Loading details">
+      <div className="detail-skeleton">
+        <span className="detail-skeleton__art skeleton-block" />
+        <div className="detail-skeleton__body">
+          <span className="skeleton-line skeleton-line--eyebrow" />
+          <span className="skeleton-line skeleton-line--title" />
+          <span className="skeleton-line skeleton-line--meta" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line skeleton-line--short" />
+          <span className="skeleton-line skeleton-line--button" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Reserves the featured area on the home page while the catalogue loads. */
+export function HeroSkeleton() {
+  return (
+    <div className="hero-skeleton" aria-hidden="true">
+      <span className="skeleton-block" />
     </div>
   );
 }

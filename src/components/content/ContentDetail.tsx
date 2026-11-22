@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, ShieldCheck } from 'lucide-react';
 import { contentMeta } from '../../lib/content';
+import { artworkTransitionName } from '../../lib/viewTransition';
 import type { ContentKind } from '../../types/content';
 import { SafeArtwork } from './SafeArtwork';
 
@@ -47,7 +48,12 @@ export function ContentDetail({
       </Link>
       <section className="content-detail">
         <div className="content-detail__art">
-          <SafeArtwork src={art} alt="" eager />
+          <SafeArtwork
+            src={art}
+            alt=""
+            eager
+            style={contentId ? { viewTransitionName: artworkTransitionName(contentId) } : undefined}
+          />
         </div>
         <div className="content-detail__body">
           <p className="eyebrow">{eyebrow}</p>
@@ -66,7 +72,7 @@ export function ContentDetail({
             </button>
           </div>
           <p className="content-detail__privacy">
-            <ShieldCheck size={15} /> Streams are resolved only when playback ships. Veyro never relays video.
+            <ShieldCheck size={15} /> Plays straight from your provider. Veyro never relays video.
           </p>
         </div>
       </section>

@@ -7,6 +7,7 @@ import {
   streamPlaylistChunks,
 } from '../../lib/m3uImportClient';
 import type { ConnectionTestResult, Provider, ProviderImportStats, ProviderType } from '../../types/providers';
+import { Spinner } from '../../components/ui/Spinner';
 
 type ActionName = 'test' | 'refresh' | 'default' | 'toggle' | 'save' | 'import' | 'delete';
 
@@ -106,6 +107,9 @@ export function ProvidersSection() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState<ActionName | null>(null);
+  const [busyProviderId, setBusyProviderId] = useState<string | null>(null);
+  // Provider deletion is destructive and irreversible, so it needs a confirm step.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
@@ -205,6 +209,7 @@ export function ProvidersSection() {
 
   async function act(provider: Provider, action: Exclude<ActionName, 'save'>) {
     setBusy(action);
+    setBusyProviderId(provider.id);
     setError('');
     setNotice('');
     try {
@@ -235,6 +240,8 @@ export function ProvidersSection() {
       setError(message(caught));
     } finally {
       setBusy(null);
+      setBusyProviderId(null);
+      setConfirmDeleteId(null);
     }
   }
 
@@ -894,7 +901,10 @@ export function ProvidersSection() {
                       Connection: {result.status}
                     </small>
                   )}
-                  <div className="provider-actions">
+                  <div
+                    className="provider-actions"
+                    aria-busy={busy !== null && busyProviderId === provider.id}
+                  >
                     {provider.type !== 'm3u_file' && (
                       <button
                         type="button"
@@ -902,7 +912,15 @@ export function ProvidersSection() {
                         disabled={busy !== null}
                         onClick={() => void act(provider, 'test')}
                       >
-                        <Wifi size={15} /> Test
+                        {busy === 'test' && busyProviderId === provider.id ? (
+                          <>
+                            <Spinner /> Testing…
+                          </>
+                        ) : (
+                          <>
+                            <Wifi size={15} /> Test
+                          </>
+                        )}
                       </button>
                     )}
                     {provider.type !== 'm3u_file' && (
@@ -912,7 +930,15 @@ export function ProvidersSection() {
                         disabled={busy !== null}
                         onClick={() => void act(provider, 'refresh')}
                       >
-                        <RefreshCw size={15} /> Refresh
+                        {busy === 'refresh' && busyProviderId === provider.id ? (
+                          <>
+                            <Spinner /> Refreshing…
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw size={15} /> Refresh
+                          </>
+                        )}
                       </button>
                     )}
                     {!provider.isDefault && (
@@ -941,14 +967,46 @@ export function ProvidersSection() {
                     >
                       Edit
                     </button>
-                    <button
-                      type="button"
-                      className="button button--danger"
-                      disabled={busy !== null}
-                      onClick={() => void act(provider, 'delete')}
-                    >
-                      <Trash2 size={15} /> Delete
-                    </button>
+                    {confirmDeleteId === provider.id ? (
+                      <>
+                        <span className="provider-actions__confirm" role="group" aria-label="Confirm deletion">
+                          Delete “{provider.name}” and its imported catalogue?
+                        </span>
+                        <button
+                          type="button"
+                          className="button button--danger"
+                          disabled={busy !== null}
+                          onClick={() => void act(provider, 'delete')}
+                          data-spatial={`provider-delete-confirm-${provider.id}`}
+                        >
+                          {busy === 'delete' ? (
+                            <>
+                              <Spinner /> Deleting…
+                            </>
+                          ) : (
+                            'Yes, delete'
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--ghost"
+                          disabled={busy !== null}
+                          onClick={() => setConfirmDeleteId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button--danger"
+                        disabled={busy !== null}
+                        onClick={() => setConfirmDeleteId(provider.id)}
+                        data-spatial={`provider-delete-${provider.id}`}
+                      >
+                        <Trash2 size={15} /> Delete
+                      </button>
+                    )}
                   </div>
                 </li>
               );
