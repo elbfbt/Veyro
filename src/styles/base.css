@@ -307,6 +307,14 @@
     top: 12px;
   }
 
+  /* Native View Transitions: shared artwork morphs card → detail. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: var(--dur-base);
+    animation-timing-function: var(--ease);
+  }
+
   @keyframes pulse {
     50% {
       opacity: 0.35;
@@ -387,6 +395,12 @@
     .spinner {
       animation-duration: 900ms !important;
       animation-iteration-count: infinite !important;
+    }
+
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
     }
   }
 }

@@ -58,6 +58,10 @@
     background: var(--surface-strong);
   }
 
+  .filter-chip:active {
+    transform: scale(0.97);
+  }
+
   .filter-chip.is-active {
     color: var(--on-accent);
     background: var(--brand-accent);
@@ -641,6 +645,8 @@
 
   .player-menu__list {
     position: absolute;
+    transform-origin: top right;
+    animation: pop-in var(--dur-fast) var(--ease) both;
     top: calc(100% + 8px);
     right: 0;
     min-width: 220px;

@@ -208,6 +208,12 @@
     transition: transform var(--dur-base) var(--ease);
   }
 
+  /* Capped entrance stagger: 30ms per card, ten cards maximum. */
+  .media-card:not(.media-card--skeleton) {
+    animation: fade-up var(--dur-base) var(--ease) backwards;
+    animation-delay: calc(var(--stagger-index, 0) * var(--stagger));
+  }
+
   .media-card:hover,
   .media-card:focus-within {
     transform: translateY(-3px);
@@ -433,6 +439,14 @@
 
   .toast--success {
     border-color: color-mix(in srgb, var(--success) 45%, transparent);
+    animation:
+      toast-in var(--dur-base) var(--ease),
+      success-pulse 700ms var(--ease);
+  }
+
+  .icon-swap {
+    display: inline-flex;
+    animation: icon-in var(--dur-fast) var(--ease);
   }
 
   .toast--error {

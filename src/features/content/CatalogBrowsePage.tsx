@@ -151,7 +151,13 @@ export function CatalogBrowsePage({
       ) : (
         <div className="media-grid" aria-busy={catalog.refreshing}>
           {catalog.items.map((item, index) => (
-            <ContentCard key={item.id} item={item} kind={kind} spatialId={`${kind}-${index}`} />
+            <ContentCard
+              key={item.id}
+              item={item}
+              kind={kind}
+              index={index}
+              spatialId={`${kind}-${index}`}
+            />
           ))}
         </div>
       )}

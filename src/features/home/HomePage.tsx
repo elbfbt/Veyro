@@ -149,7 +149,13 @@ export function HomePage() {
               </div>
               <div className="content-row__scroller">
                 {row.items.map((item, index) => (
-                  <ContentCard key={item.id} item={item} kind={row.kind} spatialId={`home-${row.id}-${index}`} />
+                  <ContentCard
+                    key={item.id}
+                    item={item}
+                    kind={row.kind}
+                    index={index}
+                    spatialId={`home-${row.id}-${index}`}
+                  />
                 ))}
               </div>
             </section>

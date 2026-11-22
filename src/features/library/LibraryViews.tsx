@@ -51,6 +51,7 @@ function Shelf({
               listLabel={listLabel}
               onRemove={() => onRemove(entry)}
               spatialId={`saved-${index}`}
+              index={index}
             />
           ))}
         </div>

@@ -947,7 +947,9 @@ export function PlayerPage() {
                     title={`${isPaused ? 'Play' : 'Pause'} (Space)`}
                     data-testid="player-btn-play"
                   >
-                    {isPaused ? <Play size={20} /> : <Pause size={20} />}
+                    <span className="icon-swap" key={isPaused ? 'play' : 'pause'}>
+                      {isPaused ? <Play size={20} /> : <Pause size={20} />}
+                    </span>
                   </button>
 
                   {isSeekable && duration > 0 && (
@@ -977,7 +979,9 @@ export function PlayerPage() {
                     title={`${isMuted ? 'Unmute' : 'Mute'} (M)`}
                     data-testid="player-btn-mute"
                   >
-                    {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                    <span className="icon-swap" key={isMuted ? 'muted' : 'sound'}>
+                      {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                    </span>
                   </button>
 
                   <input
@@ -1013,7 +1017,9 @@ export function PlayerPage() {
                       title={`${isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} (F)`}
                       data-testid="player-btn-fullscreen"
                     >
-                      {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+                      <span className="icon-swap" key={isFullscreen ? 'exit' : 'enter'}>
+                        {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+                      </span>
                     </button>
                   )}
                 </div>

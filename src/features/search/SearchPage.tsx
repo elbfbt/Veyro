@@ -147,7 +147,13 @@ export function SearchPage() {
               <div className="section-block__head"><h2 id={`search-${section.title}`}>{section.title}</h2></div>
               <div className="media-grid">
                 {section.items.map((item, index) => (
-                  <ContentCard key={item.id} item={item} kind={section.kind} spatialId={`search-${section.kind}-${index}`} />
+                  <ContentCard
+                    key={item.id}
+                    item={item}
+                    kind={section.kind}
+                    index={index}
+                    spatialId={`search-${section.kind}-${index}`}
+                  />
                 ))}
               </div>
             </section>

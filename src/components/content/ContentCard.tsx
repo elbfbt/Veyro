@@ -1,9 +1,11 @@
+import type { CSSProperties } from 'react';
 import { Bookmark, Heart } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import type { ChannelItem, ContentKind, EpisodeItem, MovieItem, SeriesItem } from '../../types/content';
 import { contentMeta } from '../../lib/content';
+import { artworkTransitionName } from '../../lib/viewTransition';
 import { useOptionalLibrary, type LibraryEntry } from '../../state/LibraryContext';
 import { useOptionalToast } from '../../state/ToastContext';
+import { ViewTransitionLink } from '../ui/ViewTransitionLink';
 import { SafeArtwork } from './SafeArtwork';
 
 export type CatalogEntry = ChannelItem | MovieItem | SeriesItem | EpisodeItem;
@@ -12,6 +14,8 @@ interface ContentCardProps {
   item: CatalogEntry;
   kind: ContentKind;
   spatialId?: string;
+  /** Position in the grid, used for the capped entrance stagger. */
+  index?: number;
 }
 
 function details(item: CatalogEntry, kind: ContentKind) {
@@ -55,7 +59,7 @@ function details(item: CatalogEntry, kind: ContentKind) {
   };
 }
 
-export function ContentCard({ item, kind, spatialId }: ContentCardProps) {
+export function ContentCard({ item, kind, spatialId, index }: ContentCardProps) {
   const view = details(item, kind);
   const library = useOptionalLibrary();
   const toast = useOptionalToast();
@@ -94,14 +98,17 @@ export function ContentCard({ item, kind, spatialId }: ContentCardProps) {
   };
 
   return (
-    <article className={`media-card content-card content-card--${kind}`}>
-      <Link
+    <article
+      className={`media-card content-card content-card--${kind}`}
+      style={index === undefined ? undefined : ({ '--stagger-index': Math.min(index, 9) } as CSSProperties)}
+    >
+      <ViewTransitionLink
         className="media-card__link"
         to={`/details/${kind}/${encodeURIComponent(item.id)}`}
         data-spatial={spatialId ?? `content-${item.id}`}
         aria-label={`Open details for ${view.title}`}
       >
-        <SafeArtwork src={view.art} />
+        <SafeArtwork src={view.art} style={{ viewTransitionName: artworkTransitionName(item.id) }} />
         <span className="media-card__scrim" aria-hidden="true" />
         <span className="media-card__top" aria-hidden="true">
           {view.live ? (
@@ -114,7 +121,7 @@ export function ContentCard({ item, kind, spatialId }: ContentCardProps) {
           <span className="media-card__title">{view.title}</span>
           <span className="media-card__meta">{view.meta || item.providerName}</span>
         </span>
-      </Link>
+      </ViewTransitionLink>
       {library && (
         <span className="media-card__actions media-card__actions--always">
           <button

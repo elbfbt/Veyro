@@ -76,7 +76,10 @@ export function AppShell() {
           onOpenDrawer={() => setDrawerOpen(true)}
         />
         <main id="main-content" className="app-content" tabIndex={-1}>
-          <Outlet />
+          {/* Keying by path gives a short crossfade between routes. */}
+          <div className="app-content__route" key={location.pathname}>
+            <Outlet />
+          </div>
         </main>
       </div>
       <MobileNav />

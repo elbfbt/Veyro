@@ -1,6 +1,8 @@
 import { Info, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { SafeArtwork } from '../content/SafeArtwork';
+import { ViewTransitionLink } from '../ui/ViewTransitionLink';
+import { artworkTransitionName } from '../../lib/viewTransition';
 import { contentMeta } from '../../lib/content';
 import type { MovieItem, SeriesItem } from '../../types/content';
 
@@ -25,7 +27,11 @@ export function HomeHero({ item, kind }: HomeHeroProps) {
   return (
     <section className="hero hero--home" aria-labelledby="home-hero-title">
       <div className="hero__media">
-        <SafeArtwork src={art} eager />
+        <SafeArtwork
+          src={art}
+          eager
+          style={{ viewTransitionName: artworkTransitionName(item.id) }}
+        />
       </div>
       <div className="hero__gradients" aria-hidden="true" />
       <div className="hero__content">
@@ -42,13 +48,13 @@ export function HomeHero({ item, kind }: HomeHeroProps) {
           >
             <Play size={18} aria-hidden="true" /> Play now
           </Link>
-          <Link
+          <ViewTransitionLink
             className="button button--ghost"
             to={`/details/${kind}/${encodeURIComponent(item.id)}`}
             data-spatial="hero-details"
           >
             <Info size={18} aria-hidden="true" /> Details
-          </Link>
+          </ViewTransitionLink>
         </div>
       </div>
     </section>
