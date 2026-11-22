@@ -141,18 +141,27 @@ describe('provider import against production legacy D1 schema', () => {
       url: 'https://provider.test/list.m3u8',
     });
     expect(created.status).toBe(201);
-    const providerId = ((await created.json()) as { provider: { id: string } }).provider.id;
+    const createdBody = await created.json();
+    const providerId = createdBody.provider.id;
+    // Auto-import on creation populates the catalogue and marks the provider active.
+    expect(createdBody.provider.status).toBe('active');
 
+    // First explicit refresh re-imports — all entries are duplicates.
     const first = await harnessA.call('POST', `/api/providers/${providerId}/refresh`);
     expect(first.status).toBe(200);
-    expect((await first.json()).added).toBe(4);
+    const firstStats = (await first.json()) as { added: number; updated: number };
+    expect(firstStats.added).toBe(0);
+    expect(firstStats.updated).toBe(4);
 
+    // Second explicit refresh — still all duplicates.
     const second = await harnessA.call('POST', `/api/providers/${providerId}/refresh`);
     expect(second.status).toBe(200);
     const secondStats = (await second.json()) as { added: number; updated: number };
     expect(secondStats.added).toBe(0);
     expect(secondStats.updated).toBe(4);
-    expect(fetchPlaylist).toHaveBeenCalledTimes(2);
+
+    // fetchPlaylist called once during auto-import + once per explicit refresh.
+    expect(fetchPlaylist).toHaveBeenCalledTimes(3);
 
     expect(rows(database, 'SELECT id FROM channels')).toHaveLength(1);
     expect(rows(database, 'SELECT id FROM movies')).toHaveLength(1);

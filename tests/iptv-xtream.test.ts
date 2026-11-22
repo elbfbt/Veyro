@@ -123,17 +123,21 @@ describe('Xtream catalogue import', () => {
   it('decrypts credentials server-side and imports all catalogue types', async () => {
     const { harness, repository, calls } = setup();
     await register(harness, 'xtream-success@example.com');
-    const id = await createXtreamProvider(harness);
 
-    const refresh = await harness.call('POST', `/api/providers/${id}/refresh`, {
-      serverUrl: 'http://127.0.0.1/attacker',
-      username: 'attacker',
-      password: 'attacker-value',
+    // Creation triggers the initial import automatically.
+    const created = await harness.call('POST', '/api/providers', {
+      name: 'My Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
     });
-    expect(refresh.status).toBe(200);
-    const stats = (await refresh.json()) as Record<string, number>;
-    expect(stats).toMatchObject({ totalEntries: 4, added: 4, skipped: 0, duplicates: 0, categoriesAdded: 3 });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.provider.status).toBe('active');
+    const id = createdBody.provider.id;
 
+    // Catalogue is populated by the auto-import.
     const entries = repository.catalog.get(id) ?? [];
     expect(entries.map((entry) => entry.kind)).toEqual(['channel', 'movie', 'series', 'episode']);
     expect(entries[0]).toMatchObject({ externalId: 'xtream:live:10', name: 'CNN', channelNumber: '101' });
@@ -148,7 +152,9 @@ describe('Xtream catalogue import', () => {
     });
     expect(repository.categories.get(id)?.map((category) => category.type)).toEqual(['channel', 'movie', 'series']);
 
-    expect(calls.map((url) => url.searchParams.get('action'))).toEqual([
+    // Auto-import made the expected Xtream API calls.
+    const importActions = calls.map((url) => url.searchParams.get('action'));
+    expect(importActions).toEqual([
       'get_live_categories',
       'get_vod_categories',
       'get_series_categories',
@@ -165,6 +171,17 @@ describe('Xtream catalogue import', () => {
     }
     expect(calls[6]?.searchParams.get('series_id')).toBe('30');
     expect(calls.some((url) => url.hostname === '127.0.0.1')).toBe(false);
+
+    // Explicit refresh re-imports — MemoryProviderRepository reports all as added
+    // (duplicate detection is a D1-layer concern; memory repo always overwrites).
+    const refresh = await harness.call('POST', `/api/providers/${id}/refresh`, {
+      serverUrl: 'http://127.0.0.1/attacker',
+      username: 'attacker',
+      password: 'attacker-value',
+    });
+    expect(refresh.status).toBe(200);
+    const stats = (await refresh.json()) as Record<string, number>;
+    expect(stats).toMatchObject({ totalEntries: 4, added: 4, skipped: 0, duplicates: 0, categoriesAdded: 3 });
   });
 
   it('tests the connection using decrypted credentials without exposing them', async () => {
@@ -174,9 +191,10 @@ describe('Xtream catalogue import', () => {
     const response = await harness.call('POST', `/api/providers/${id}/test`);
     expect(response.status).toBe(200);
     expect(((await response.json()) as { ok: boolean }).ok).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.searchParams.get('action')).toBe('get_live_categories');
-    expect(calls[0]?.searchParams.get('password')).toBe(PASSWORD);
+    // Auto-import made calls during creation; the test connection call is the last one.
+    const testCall = calls[calls.length - 1];
+    expect(testCall?.searchParams.get('action')).toBe('get_live_categories');
+    expect(testCall?.searchParams.get('password')).toBe(PASSWORD);
   });
 
   it('never exposes the password, upstream URL or credential material to the client', async () => {
@@ -220,6 +238,9 @@ describe('Xtream catalogue import', () => {
     await register(harness, 'owner-xtream@example.com');
     await register(other, 'other-xtream@example.com');
     const id = await createXtreamProvider(harness);
+
+    // Auto-import already made calls during creation. Clear to track refresh-specific calls.
+    calls.splice(0, calls.length);
 
     const noCsrf = await harness.call('POST', `/api/providers/${id}/refresh`, undefined, { csrf: false });
     expect(noCsrf.status).toBe(403);
@@ -304,6 +325,9 @@ describe('Xtream failure handling', () => {
     expect(rejectedCreate.status).toBe(400);
 
     const validId = await createXtreamProvider(invalid.harness);
+    // Auto-import made calls during creation; clear to track refresh-specific calls.
+    invalid.calls.splice(0, invalid.calls.length);
+
     const provider = await invalid.repository.find('user-tamper', validId);
     const stored = provider ?? [...invalid.repository.providers.values()].find((item) => item.id === validId);
     if (!stored) throw new Error('provider was not stored');
@@ -340,5 +364,127 @@ describe('Xtream failure handling', () => {
     const body = await response.text();
     expect(body).toContain('provider_timeout');
     expect(body).not.toContain(PASSWORD);
+  });
+
+  /* ── Xtream auto import on creation ─────────────────────────── */
+
+  it('Xtream creation triggers automatic catalogue import', async () => {
+    const { harness, repository, calls } = setup();
+    await register(harness, 'xtream-auto@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Auto Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is active after auto-import
+    expect(body.provider.status).toBe('active');
+    expect(body.provider.importing).toBe(false);
+
+    // Catalogue is populated
+    const providerId = body.provider.id;
+    const stored = repository.catalog.get(providerId);
+    expect(stored).toBeDefined();
+    expect(stored!.length).toBeGreaterThan(0);
+
+    // Xtream API calls were made during auto-import
+    expect(calls.length).toBeGreaterThan(0);
+    for (const url of calls) {
+      expect(url.origin).toBe(SERVER);
+      expect(url.searchParams.get('username')).toBe('viewer');
+      expect(url.searchParams.get('password')).toBe(PASSWORD);
+    }
+  });
+
+  it('Xtream creation does not expose credentials to the client', async () => {
+    const { harness } = setup();
+    await register(harness, 'xtream-secret@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Secret Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    });
+    expect(response.status).toBe(201);
+
+    const body = await response.text();
+    expect(body).not.toContain(PASSWORD);
+    expect(body).not.toContain('credentials_encrypted');
+
+    // List also doesn't expose credentials
+    const listed = await harness.call('GET', '/api/providers');
+    const listedBody = await listed.text();
+    expect(listedBody).not.toContain(PASSWORD);
+    expect(listedBody).not.toContain('credentials_encrypted');
+  });
+
+  it('Xtream failed import leaves provider retryable with error state', async () => {
+    const { harness, setResponder } = setup();
+    await register(harness, 'xtream-fail@example.com');
+
+    // Make the upstream return 401 so auto-import fails
+    setResponder(() => new Response('unauthorized', { status: 401 }));
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Failing Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+
+    // Provider is in error state, not silently successful
+    expect(body.provider.status).toBe('error');
+    expect(body.provider.lastError).toContain('authentication');
+    expect(body.provider.importing).toBe(false);
+
+    const providerId = body.provider.id;
+
+    // Provider exists in list with error state
+    const listResp = await harness.call('GET', '/api/providers');
+    const listBody = await listResp.json();
+    const imported = listBody.providers.find((p: { id: string }) => p.id === providerId);
+    expect(imported).toBeDefined();
+    expect(imported.status).toBe('error');
+
+    // Retry via refresh succeeds with good credentials
+    setResponder((url) => catalogue(url.searchParams.get('action') ?? '', url.searchParams.get('series_id') ?? undefined));
+    const refreshed = await harness.call('POST', `/api/providers/${providerId}/refresh`);
+    expect(refreshed.status).toBe(200);
+
+    // Provider is now active
+    const listResp2 = await harness.call('GET', '/api/providers');
+    const listBody2 = await listResp2.json();
+    const active = listBody2.providers.find((p: { id: string }) => p.id === providerId);
+    expect(active!.status).toBe('active');
+  });
+
+  it('ownership is enforced on auto-imported Xtream providers', async () => {
+    const { harness, other } = setup();
+    await register(harness, 'xtream-owner@example.com');
+    await register(other, 'xtream-other@example.com');
+
+    const response = await harness.call('POST', '/api/providers', {
+      name: 'Owner Xtream',
+      type: 'xtream',
+      serverUrl: SERVER,
+      username: 'viewer',
+      password: PASSWORD,
+    });
+    expect(response.status).toBe(201);
+    const providerId = (await response.json()).provider.id;
+
+    // Other user cannot access the auto-imported provider
+    expect((await other.call('GET', `/api/providers/${providerId}`)).status).toBe(404);
+    expect((await other.call('DELETE', `/api/providers/${providerId}`)).status).toBe(404);
   });
 });

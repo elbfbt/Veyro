@@ -7,6 +7,7 @@ import { XtreamClient, XtreamClientError } from './xtreamClient';
 import type {
   ConnectionTestResult,
   CreateProviderInput,
+  ImportProgress,
   ImportStats,
   M3uEntry,
   PlaylistFetcher,
@@ -26,6 +27,31 @@ export class ProviderError extends Error {
     super(message);
     this.name = 'ProviderError';
   }
+}
+
+/** Maximum number of entries accepted in a single M3U file import. */
+const MAX_TOTAL_ENTRIES = 100_000;
+
+/** Number of entries imported per chunked request. */
+const CHUNK_SIZE = 1_000;
+
+/** Only HTTP(S) stream URLs are safe for browser playback. */
+function isSafeStreamUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Hash a chunk's entries for idempotent retry detection. */
+async function hashChunkPayload(entries: M3uEntry[]): Promise<string> {
+  const payload = JSON.stringify(
+    entries.map((e) => ({ externalId: e.externalId, name: e.name, streamUrl: e.streamUrl })),
+  );
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+  return toBase64Url(new Uint8Array(digest));
 }
 
 function validName(value: unknown): string {
@@ -53,6 +79,7 @@ function toView(provider: StoredProvider): ProviderView {
     lastImport: (provider.metadata.lastImport as Record<string, unknown> | undefined) ?? null,
     lastError: typeof provider.metadata.lastError === 'string' ? provider.metadata.lastError : null,
     xtreamUsername: typeof provider.metadata.xtreamUsername === 'string' ? provider.metadata.xtreamUsername : null,
+    importing: provider.metadata.import_status === 'importing',
     createdAt: provider.createdAt,
     updatedAt: provider.updatedAt,
   };
@@ -144,6 +171,7 @@ export class ProviderService {
     }
 
     const existing = await this.repository.list(userId);
+    const isRemoteType = type === 'm3u_url' || type === 'xtream';
     const provider: StoredProvider = {
       id: this.ids.newId(),
       userId,
@@ -152,7 +180,10 @@ export class ProviderService {
       serverUrl,
       credentialsEncrypted,
       credentialsKeyId,
-      status: 'active',
+      // Remote providers start in 'refreshing' state while the initial
+      // catalogue import runs in the background of this request. They are
+      // never reported as 'active' with an empty catalogue.
+      status: isRemoteType ? 'refreshing' : 'active',
       isDefault: existing.length === 0,
       lastRefreshAt: null,
       metadata,
@@ -160,7 +191,24 @@ export class ProviderService {
       updatedAt: now,
     };
     await this.repository.create(provider);
-    return toView(provider);
+
+    // Trigger the initial catalogue import for remote providers. Reuses the
+    // existing refresh() pipeline — no duplicated import logic. If the import
+    // fails, refresh() already sets status to 'error' with lastError, and the
+    // provider is preserved so the user can retry. We await it so the response
+    // reflects the true import outcome; if the Worker times out, the provider
+    // already exists in D1 with 'refreshing' status and can be retried via
+    // the existing Refresh endpoint.
+    if (isRemoteType) {
+      try {
+        await this.refresh(userId, provider.id);
+      } catch {
+        // Import failed — provider is preserved in 'error' state with
+        // lastError set by refresh(). Fall through to return the current view.
+      }
+    }
+
+    return this.get(userId, provider.id);
   }
 
   async update(userId: string, id: string, input: UpdateProviderInput): Promise<ProviderView> {
@@ -326,6 +374,349 @@ export class ProviderService {
       throw error;
     }
     return this.get(userId, provider.id);
+  }
+
+  async importInit(
+    userId: string,
+    name: string,
+    totalEntries: number,
+    totalChunks: number,
+    chunkSize: number,
+    _fileSize: number,
+  ): Promise<{ jobId: string; providerId: string }> {
+    const providerName = validName(name);
+    const now = this.clock.now();
+
+    if (totalEntries > MAX_TOTAL_ENTRIES) {
+      throw new ProviderError('playlist_too_large', 413, `Playlist exceeds ${MAX_TOTAL_ENTRIES} entry limit.`);
+    }
+    if (totalEntries <= 0) {
+      throw new ProviderError('validation_error', 400, 'Playlist contains no entries.');
+    }
+    if (totalChunks <= 0 || chunkSize <= 0 || totalChunks * chunkSize < totalEntries) {
+      throw new ProviderError('validation_error', 400, 'Invalid chunk parameters.');
+    }
+
+    const provider = await this.create(userId, {
+      name: providerName,
+      type: 'm3u_file',
+    });
+    const stored = await this.owned(userId, provider.id);
+
+    const jobId = await this.repository.createImportJob(
+      userId,
+      stored.id,
+      name,
+      totalEntries,
+      totalChunks,
+      now,
+    );
+
+    // Mark the provider as import-in-progress so it is visibly incomplete
+    // until importComplete marks it active.
+    await this.repository.update(userId, stored.id, {
+      metadata: { import_job_id: jobId, import_status: 'importing' },
+    }, now);
+
+    await this.repository.updateImportJob(userId, jobId, { status: 'importing' }, now);
+
+    return { jobId, providerId: stored.id };
+  }
+
+  async importChunk(
+    userId: string,
+    jobId: string,
+    chunkIndex: number,
+    entries: M3uEntry[],
+  ): Promise<{ chunkIndex: number; status: 'completed' | 'importing'; importedEntries: number }> {
+    const now = this.clock.now();
+
+    const job = await this.repository.getImportJob(userId, jobId, now);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    if (entries.length === 0) {
+      throw new ProviderError('validation_error', 400, 'Chunk must contain at least one entry.');
+    }
+
+    if (chunkIndex < 0 || chunkIndex >= job.totalChunks) {
+      throw new ProviderError('validation_error', 400, 'Chunk index out of range.');
+    }
+
+    // Idempotency: retry of the just-completed chunk with the same payload.
+    // Checked before the status check so a lost-response retry of the final
+    // chunk (job already 'completed') still succeeds.
+    if (chunkIndex === job.lastProcessedChunk) {
+      const retryHash = await hashChunkPayload(entries);
+      if (retryHash === job.lastChunkHash) {
+        // Same chunk, same payload — already processed. Return success without
+        // double-counting imported_entries or advancing completed_chunks.
+        return {
+          chunkIndex,
+          status: chunkIndex + 1 >= job.totalChunks ? 'completed' : 'importing',
+          importedEntries: job.importedEntries,
+        };
+      }
+      // Same chunk index but different payload — reject.
+      throw new ProviderError(
+        'validation_error',
+        409,
+        `Chunk ${chunkIndex} already processed with a different payload.`,
+      );
+    }
+
+    if (job.status !== 'importing') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        `Import job is not active (status: ${job.status}).`,
+      );
+    }
+
+    // Sequential enforcement: must be the next expected chunk.
+    if (chunkIndex !== job.completedChunks) {
+      throw new ProviderError(
+        'validation_error',
+        409,
+        `Chunks must be submitted sequentially. Expected chunk ${job.completedChunks}, received ${chunkIndex}.`,
+      );
+    }
+
+    if (entries.length > CHUNK_SIZE) {
+      throw new ProviderError('validation_error', 400, `Chunk exceeds ${CHUNK_SIZE} entry limit.`);
+    }
+
+    // Validate every entry's stream URL before writing
+    for (const entry of entries) {
+      if (!entry.streamUrl || !isSafeStreamUrl(entry.streamUrl)) {
+        throw new ProviderError(
+          'unsafe_url',
+          400,
+          `Entry "${entry.name}" has an unsafe stream URL.`,
+        );
+      }
+      if (!entry.externalId || !entry.name) {
+        throw new ProviderError('validation_error', 400, 'Entry missing required fields.');
+      }
+    }
+
+    // Write catalogue entries. If a concurrent request already inserted the
+    // same entries, the UNIQUE constraint on (provider_id, external_id) will
+    // be violated. We recover by checking whether the job state was already
+    // advanced by the concurrent request.
+    try {
+      const keys = await this.repository.loadCatalogKeys(userId, job.providerId);
+      await this.repository.saveCatalog(
+        userId,
+        job.providerId,
+        entries,
+        keys,
+        this.ids,
+        now,
+      );
+    } catch (error) {
+      const isUniqueViolation =
+        error instanceof Error && /UNIQUE constraint failed/.test(error.message);
+      if (!isUniqueViolation) throw error;
+
+      // Concurrent request already wrote these catalogue entries. Re-read the
+      // job state to see whether the other request already advanced it.
+      const refreshedJob = await this.repository.getImportJob(userId, jobId, now);
+      if (!refreshedJob) {
+        throw new ProviderError('not_found', 404, 'Import job not found.');
+      }
+
+      // The other request already completed this chunk — idempotent success.
+      if (refreshedJob.completedChunks > chunkIndex) {
+        if (
+          refreshedJob.lastProcessedChunk === chunkIndex &&
+          refreshedJob.lastChunkHash
+        ) {
+          const retryHash = await hashChunkPayload(entries);
+          if (retryHash !== refreshedJob.lastChunkHash) {
+            throw new ProviderError(
+              'validation_error',
+              409,
+              `Chunk ${chunkIndex} already processed with a different payload.`,
+            );
+          }
+        }
+        return {
+          chunkIndex,
+          status: refreshedJob.status === 'completed' ? 'completed' : 'importing',
+          importedEntries: refreshedJob.importedEntries,
+        };
+      }
+
+      // The other request is also processing this chunk. Try to atomically
+      // advance the job state — the catalogue entries already exist.
+      if (refreshedJob.completedChunks !== chunkIndex) {
+        throw new ProviderError(
+          'validation_error',
+          409,
+          'Chunk was processed by another request. Retry with the next chunk.',
+        );
+      }
+
+      const chunkHash = await hashChunkPayload(entries);
+      const advanced = await this.repository.updateImportJob(
+        userId,
+        jobId,
+        {
+          importedEntries: refreshedJob.importedEntries + entries.length,
+          completedChunks: refreshedJob.completedChunks + 1,
+          lastProcessedChunk: chunkIndex,
+          lastChunkHash: chunkHash,
+          status:
+            refreshedJob.completedChunks + 1 >= refreshedJob.totalChunks
+              ? 'completed'
+              : 'importing',
+        },
+        now,
+        refreshedJob.completedChunks,
+        refreshedJob.lastProcessedChunk,
+      );
+
+      if (!advanced) {
+        throw new ProviderError(
+          'validation_error',
+          409,
+          'Chunk was processed by another request. Retry with the next chunk.',
+        );
+      }
+
+      return {
+        chunkIndex,
+        status:
+          refreshedJob.completedChunks + 1 >= refreshedJob.totalChunks
+            ? 'completed'
+            : 'importing',
+        importedEntries: refreshedJob.importedEntries + entries.length,
+      };
+    }
+
+    // Normal (non-concurrent) path: catalogue was written by this request.
+    const importedEntries = job.importedEntries + entries.length;
+    const completedChunks = job.completedChunks + 1;
+    const isFinal = completedChunks >= job.totalChunks;
+    const chunkHash = await hashChunkPayload(entries);
+
+    const advanced = await this.repository.updateImportJob(
+      userId,
+      jobId,
+      {
+        importedEntries,
+        completedChunks,
+        lastProcessedChunk: chunkIndex,
+        lastChunkHash: chunkHash,
+        status: isFinal ? 'completed' : 'importing',
+      },
+      now,
+      job.completedChunks,
+      job.lastProcessedChunk,
+    );
+
+    if (!advanced) {
+      // Another request advanced the state between our catalogue write and
+      // this update. The catalogue entries are already persisted. Re-read the
+      // job to report the correct state.
+      const refreshedJob = await this.repository.getImportJob(userId, jobId, now);
+      if (!refreshedJob) {
+        throw new ProviderError('not_found', 404, 'Import job not found.');
+      }
+      if (refreshedJob.completedChunks > chunkIndex) {
+        return {
+          chunkIndex,
+          status: refreshedJob.status === 'completed' ? 'completed' : 'importing',
+          importedEntries: refreshedJob.importedEntries,
+        };
+      }
+      throw new ProviderError(
+        'validation_error',
+        409,
+        'Chunk was processed by another request. Retry with the next chunk.',
+      );
+    }
+
+    return {
+      chunkIndex,
+      status: isFinal ? 'completed' : 'importing',
+      importedEntries,
+    };
+  }
+
+  async getImportProgress(userId: string, jobId: string): Promise<ImportProgress> {
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    const percentage = job.totalEntries > 0
+      ? Math.round((job.importedEntries / job.totalEntries) * 100)
+      : 0;
+
+    return {
+      jobId: job.id,
+      status: job.status,
+      totalEntries: job.totalEntries,
+      importedEntries: job.importedEntries,
+      totalChunks: job.totalChunks,
+      completedChunks: job.completedChunks,
+      percentage,
+      error: job.error,
+      providerId: job.providerId,
+    };
+  }
+
+  async cancelImport(userId: string, jobId: string): Promise<boolean> {
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+    if (job.status === 'completed') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        'Cannot cancel a completed import job.',
+      );
+    }
+    return this.repository.cancelImportJob(userId, jobId, now);
+  }
+
+  async importComplete(userId: string, jobId: string): Promise<ProviderView> {
+    const now = this.clock.now();
+    const job = await this.repository.getImportJob(userId, jobId, now);
+    if (!job) {
+      throw new ProviderError('not_found', 404, 'Import job not found.');
+    }
+
+    if (job.status !== 'completed') {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        `Import job is not completed (status: ${job.status}).`,
+      );
+    }
+
+    if (job.importedEntries < job.totalEntries) {
+      throw new ProviderError(
+        'validation_error',
+        400,
+        'Import incomplete: not all entries were processed.',
+      );
+    }
+
+    // Mark the provider as fully imported and active. Clearing the import
+    // metadata makes it indistinguishable from any other completed provider.
+    await this.repository.update(userId, job.providerId, {
+      metadata: {},
+      status: 'active',
+    }, now);
+
+    return this.get(userId, job.providerId);
   }
 
   private async importText(userId: string, provider: StoredProvider, content: string): Promise<ImportStats> {
