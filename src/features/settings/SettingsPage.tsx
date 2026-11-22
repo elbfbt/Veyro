@@ -125,17 +125,18 @@ export function SettingsPage() {
         </h2>
         <div className="settings-card">
           <p className="settings-card__note">
-            Saved now for the PlaybackManager introduced in Phase 5. No playback engine is active yet,
-            which avoids presenting a simulated player as a real one.
+            The player honours these choices for HLS streams. HLS.js is loaded on demand and MP4 files
+            always use the browser's native pipeline; the in-player menu can override the engine for
+            the current stream.
           </p>
           <SelectRow
             label="Preferred player"
+            description="Auto uses the browser's native player for HLS and falls back to hls.js only when needed."
             value="preferredPlayer"
             options={[
               { label: 'Auto', value: 'auto' },
               { label: 'Native HTML5', value: 'native' },
               { label: 'HLS.js', value: 'hls' },
-              { label: 'Shaka Player', value: 'shaka' },
             ]}
             onChange={update}
           />
@@ -146,7 +147,6 @@ export function SettingsPage() {
               { label: 'Auto', value: 'auto' },
               { label: 'Native HTML5', value: 'native' },
               { label: 'HLS.js', value: 'hls' },
-              { label: 'Shaka Player', value: 'shaka' },
             ]}
             onChange={update}
           />

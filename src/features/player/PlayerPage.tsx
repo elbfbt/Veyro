@@ -3,6 +3,7 @@ import { Link, useMatch, useParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
+  Gauge,
   Maximize,
   Minimize,
   MonitorPlay,
@@ -10,10 +11,33 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import { getChannelStream, getMovieStream, getEpisodeStream } from '../../lib/contentApi';
+import {
+  attachHlsEngine,
+  resetMediaElement,
+  type HlsEngineHandle,
+  type HlsFatalErrorKind,
+} from '../../lib/hlsEngine';
+import {
+  availableEngines,
+  describeQualityOptions,
+  formatQualityLabel,
+  isHlsUrl,
+  nativeQualityLabel,
+  normalizeEnginePreference,
+  QUALITY_UNAVAILABLE_NATIVE,
+  resolveEngine,
+  shouldFallbackToNative,
+  type EnginePreference,
+  type PlaybackEngine,
+  type QualityLevel,
+} from '../../lib/playerEngine';
+import { useOptionalPreferences } from '../../state/PreferencesContext';
+import { PlayerMenu, type PlayerMenuItem } from './PlayerMenus';
 
 type PlayerKind = 'channel' | 'movie' | 'episode';
 
@@ -85,11 +109,53 @@ export function PlayerPage() {
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
   const [pipSupported, setPipSupported] = useState(false);
 
+  // --- Playback engine state ---
+  const preferences = useOptionalPreferences();
+  const [nativeHlsSupported, setNativeHlsSupported] = useState(false);
+  const [hlsJsSupported, setHlsJsSupported] = useState(false);
+  const [engineOverride, setEngineOverride] = useState<PlaybackEngine | null>(null);
+  const [engineNotice, setEngineNotice] = useState<string | null>(null);
+  const [attachNonce, setAttachNonce] = useState(0);
+  const [hlsLevels, setHlsLevels] = useState<QualityLevel[]>([]);
+  const [hlsActiveLevel, setHlsActiveLevel] = useState(-1);
+  const [hlsAuto, setHlsAuto] = useState(true);
+  const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
+  const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
+
   // --- Refs ---
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const startupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hlsHandleRef = useRef<HlsEngineHandle | null>(null);
+  const resumeTimeRef = useRef<number | null>(null);
+  const failureHandlerRef = useRef<(kind: HlsFatalErrorKind) => void>(() => {});
+
+  /**
+   * Keep the ref and a state copy of the mounted element in sync. The engine
+   * effects need a dependency that changes when the <video> first mounts,
+   * because it only renders once the stream has been resolved.
+   */
+  const attachVideoElement = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    setMediaElement(node);
+  }, []);
+
+  // --- Resolved playback engine --------------------------------------------
+  // Only HLS offers a choice of engine; MP4 and other formats always use the
+  // browser's native pipeline.
+  const activeStreamUrl = stream?.playable ? (stream.streamUrl ?? null) : null;
+  const hasHlsStream = activeStreamUrl ? isHlsUrl(activeStreamUrl) : false;
+  const enginePreference: EnginePreference = normalizeEnginePreference(
+    preferences?.preferences.preferredPlayer,
+  );
+  const preferredEngine: PlaybackEngine = hasHlsStream
+    ? resolveEngine(enginePreference, {
+        nativeHls: nativeHlsSupported,
+        hlsJs: hlsJsSupported,
+      })
+    : 'native';
+  const engine: PlaybackEngine = hasHlsStream && engineOverride ? engineOverride : preferredEngine;
 
   /** Cancel all pending timers to avoid state updates after unmount or state transition. */
   const clearTimers = useCallback(() => {
@@ -148,6 +214,9 @@ export function PlayerPage() {
   const handleVideoError = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    // Browsers fire an aborted-load error while engines swap and the element is
+    // momentarily empty; that is not a stream failure.
+    if (!video.currentSrc && !video.getAttribute('src') && !video.querySelector('source')) return;
     const err = video.error;
     if (!err) {
       setPlayError('Playback failed.');
@@ -184,6 +253,7 @@ export function PlayerPage() {
     setCurrentTime(video.currentTime);
     setIsSeekable(video.seekable && video.seekable.length > 0);
     setIsPaused(video.paused);
+    setVideoSize({ width: video.videoWidth ?? 0, height: video.videoHeight ?? 0 });
   }, []);
 
   const handleVideoTimeUpdate = useCallback(() => {
@@ -284,19 +354,168 @@ export function PlayerPage() {
     setPlayError(null);
     setPlayerState('connecting');
 
-    video.load();
-  }, [retryCount]);
+    // hls.js owns the media element; re-attaching happens through attachNonce.
+    if (engine !== 'hls') video.load();
+    setAttachNonce((nonce) => nonce + 1);
+  }, [engine, retryCount]);
 
   const handleManualRetry = useCallback(() => {
     setRetryCount(0);
     setPlayError(null);
     setPlayerState('connecting');
     const video = videoRef.current;
-    if (video) {
+    if (video && engine !== 'hls') {
       video.load();
     }
+    setAttachNonce((nonce) => nonce + 1);
     void handlePlay();
-  }, [handlePlay]);
+  }, [engine, handlePlay]);
+
+  // --- Playback engine ---------------------------------------------------------
+
+  // Detect what this browser can actually do once, on mount.
+  useEffect(() => {
+    const probeVideo = document.createElement('video');
+    setNativeHlsSupported(probeVideo.canPlayType('application/vnd.apple.mpegurl') !== '');
+    setHlsJsSupported(typeof MediaSource !== 'undefined');
+  }, []);
+
+  /** Route hls.js failures to the UI, falling back to native in Auto mode. */
+  const handleEngineFailure = useCallback(
+    (kind: HlsFatalErrorKind) => {
+      if (
+        shouldFallbackToNative(enginePreference, kind, {
+          nativeHls: nativeHlsSupported,
+          hlsJs: hlsJsSupported,
+        })
+      ) {
+        // hls.js needs the provider to allow cross-origin requests; native
+        // playback does not, so Auto mode recovers by switching engines.
+        setEngineOverride('native');
+        setEngineNotice(
+          kind === 'network'
+            ? 'HLS.js could not load this stream — the provider may not allow cross-origin playback (CORS). Using native playback instead.'
+            : 'HLS.js is unavailable for this stream. Using native playback instead.',
+        );
+        setPlayError(null);
+        setPlayerState('connecting');
+        setAttachNonce((nonce) => nonce + 1);
+        return;
+      }
+
+      setPlayError(
+        kind === 'unavailable'
+          ? 'The HLS.js engine could not be loaded and this browser cannot play HLS natively.'
+          : kind === 'media'
+            ? 'HLS.js could not decode this stream.'
+            : 'HLS.js could not load this stream. The provider may block cross-origin playback (CORS).',
+      );
+      setPlayerState('failed');
+    },
+    [enginePreference, hlsJsSupported, nativeHlsSupported],
+  );
+
+  useEffect(() => {
+    failureHandlerRef.current = handleEngineFailure;
+  }, [handleEngineFailure]);
+
+  // Attach hls.js when it is the resolved engine. The cleanup fully tears the
+  // instance down before any other engine can take over the media element.
+  useEffect(() => {
+    if (engine !== 'hls' || !hasHlsStream || !activeStreamUrl) return;
+    const video = mediaElement;
+    if (!video) return;
+
+    let disposed = false;
+    void attachHlsEngine({
+      video,
+      url: activeStreamUrl,
+      restoreTime: isLive ? null : resumeTimeRef.current,
+      onLevels: (levels) => {
+        if (!disposed) setHlsLevels(levels);
+      },
+      onLevelSwitch: ({ level, auto }) => {
+        if (disposed) return;
+        setHlsActiveLevel(level);
+        setHlsAuto(auto);
+      },
+      onFatalError: ({ kind }) => {
+        if (!disposed) failureHandlerRef.current(kind);
+      },
+    }).then((handle) => {
+      if (disposed) {
+        handle?.destroy();
+        return;
+      }
+      hlsHandleRef.current = handle;
+    });
+
+    return () => {
+      disposed = true;
+      hlsHandleRef.current?.destroy();
+      hlsHandleRef.current = null;
+      resetMediaElement(video);
+      setHlsLevels([]);
+      setHlsActiveLevel(-1);
+      setHlsAuto(true);
+    };
+  }, [engine, hasHlsStream, activeStreamUrl, attachNonce, isLive, mediaElement]);
+
+  // Native playback renders its <source> in JSX; reload after an engine switch
+  // (or retry) and restore the previous position for VOD.
+  useEffect(() => {
+    if (engine !== 'native' || !activeStreamUrl) return;
+    const video = mediaElement;
+    if (!video) return;
+
+    try {
+      video.load();
+    } catch {
+      // Environments without a working media pipeline (tests) have nothing to load.
+    }
+
+    const restore = isLive ? null : resumeTimeRef.current;
+    if (typeof restore !== 'number' || !Number.isFinite(restore) || restore <= 0) return;
+
+    const onLoaded = () => {
+      try {
+        video.currentTime = restore;
+      } catch {
+        // Seek rejected by the browser; playback simply starts at the beginning.
+      }
+    };
+    video.addEventListener('loadedmetadata', onLoaded, { once: true });
+    return () => video.removeEventListener('loadedmetadata', onLoaded);
+  }, [engine, activeStreamUrl, attachNonce, isLive, mediaElement]);
+
+  // A new stream starts with a clean engine choice.
+  useEffect(() => {
+    setEngineOverride(null);
+    setEngineNotice(null);
+    resumeTimeRef.current = null;
+  }, [activeStreamUrl]);
+
+  const selectEngine = useCallback(
+    (next: EnginePreference) => {
+      const video = videoRef.current;
+      const position = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      resumeTimeRef.current = !isLive && position > 0 ? position : null;
+      setEngineOverride(next === 'auto' ? null : next);
+      preferences?.update('preferredPlayer', next);
+      setEngineNotice(null);
+      setPlayError(null);
+      setRetryCount(0);
+      setPlayerState('connecting');
+      setAttachNonce((nonce) => nonce + 1);
+    },
+    [isLive, preferences],
+  );
+
+  const selectQuality = useCallback((levelIndex: number) => {
+    hlsHandleRef.current?.setLevel(levelIndex);
+    setHlsAuto(levelIndex === -1);
+    if (levelIndex >= 0) setHlsActiveLevel(levelIndex);
+  }, []);
 
   // --- Interaction handlers (controls visibility) ---
   const handlePointerMove = useCallback(() => {
@@ -578,16 +797,64 @@ export function PlayerPage() {
   }
 
   const streamUrl = resolution.streamUrl!;
-  const isHls = /\.m3u8([?#]|$)/i.test(streamUrl);
+  const isHls = isHlsUrl(streamUrl);
 
   const probe = (type: string) => {
     const video = document.createElement('video');
     return video.canPlayType(type) !== '';
   };
-  const canPlay = isHls ? probe('application/vnd.apple.mpegurl') : probe('video/mp4');
+  const canPlay = isHls ? nativeHlsSupported || hlsJsSupported : probe('video/mp4');
 
   const autoRetryAvailable = retryCount < MAX_RETRIES;
   const kindLabel = kind === 'channel' ? 'Live TV' : kind === 'movie' ? 'Movie' : 'Episode';
+
+  // --- Engine + quality menus -------------------------------------------------
+  const engineMenuOptions = hasHlsStream
+    ? availableEngines({ nativeHls: nativeHlsSupported, hlsJs: hlsJsSupported })
+    : [];
+  const selectedEnginePreference: EnginePreference = engineOverride ?? enginePreference;
+  const engineMenuItems: PlayerMenuItem[] = engineMenuOptions.map((option) => ({
+    key: option.value,
+    label: option.label,
+    active: option.value === selectedEnginePreference,
+    onSelect: () => selectEngine(option.value),
+  }));
+
+  const nativeQuality = nativeQualityLabel(videoSize.height);
+  const activeHlsLevel = hlsLevels.find((level) => level.index === hlsActiveLevel) ?? null;
+  const qualityValue =
+    engine === 'hls'
+      ? hlsAuto || !activeHlsLevel
+        ? 'Auto'
+        : formatQualityLabel(activeHlsLevel)
+      : (nativeQuality ?? 'Quality');
+
+  const qualityMenuItems: PlayerMenuItem[] =
+    engine === 'hls'
+      ? describeQualityOptions(hlsLevels, hlsActiveLevel, hlsAuto).map((option) => ({
+          key: option.key,
+          label: option.label,
+          active: option.active,
+          disabled: option.disabled,
+          onSelect: () => selectQuality(option.levelIndex),
+        }))
+      : [
+          {
+            key: 'native-quality',
+            label: nativeQuality ?? QUALITY_UNAVAILABLE_NATIVE,
+            active: true,
+            disabled: true,
+          },
+          ...(hasHlsStream && hlsJsSupported
+            ? [
+                {
+                  key: 'switch-to-hls',
+                  label: 'Switch to HLS.js for quality control',
+                  onSelect: () => selectEngine('hls'),
+                },
+              ]
+            : []),
+        ];
 
   return (
     <div
@@ -611,13 +878,31 @@ export function PlayerPage() {
                 LIVE
               </span>
             )}
+            <div className="player-menu-group">
+              {engineMenuItems.length > 1 && (
+                <PlayerMenu
+                  label="Playback engine"
+                  value={engine === 'hls' ? 'HLS.js' : 'Native'}
+                  items={engineMenuItems}
+                  icon={<SlidersHorizontal size={14} aria-hidden="true" />}
+                  testId="player-engine-menu"
+                />
+              )}
+              <PlayerMenu
+                label="Quality"
+                value={qualityValue}
+                items={qualityMenuItems}
+                icon={<Gauge size={14} aria-hidden="true" />}
+                testId="player-quality-menu"
+              />
+            </div>
           </div>
         )}
 
         {canPlay ? (
           <div className="player-video-container">
             <video
-              ref={videoRef}
+              ref={attachVideoElement}
               autoPlay
               playsInline
               muted={isMuted}
@@ -631,9 +916,18 @@ export function PlayerPage() {
               onClick={handleTogglePlay}
               className="player-video"
               data-testid="player-video"
+              data-engine={engine}
             >
-              <source src={streamUrl} />
+              {engine === 'native' && (
+                <source key={`${streamUrl}-${attachNonce}`} src={streamUrl} />
+              )}
             </video>
+
+            {engineNotice && (
+              <p className="player-engine-notice" role="status">
+                {engineNotice}
+              </p>
+            )}
 
             {playerState === 'buffering' && (
               <div className="player-buffering">
@@ -735,6 +1029,11 @@ export function PlayerPage() {
                     ? 'Click to Play'
                     : 'Retry Playback'}
                 </button>
+                {engine === 'hls' && nativeHlsSupported && (
+                  <button type="button" className="button button--ghost" onClick={() => selectEngine('native')}>
+                    Use native player
+                  </button>
+                )}
                 {!autoRetryAvailable && (
                   <p className="player-error__terminal">
                     Automatic retries exhausted. Try again manually when ready.
