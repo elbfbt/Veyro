@@ -112,4 +112,35 @@ describe('ProvidersSection — chunked import blank page bug', () => {
     expect(screen.queryByText(/Import M3U Playlist/)).toBeNull();
   });
 
+  it('parses the selected playlist off the main thread and shows a preview', async () => {
+    mockProvidersList();
+
+    render(<ProvidersSection />);
+    fireEvent.click(screen.getByRole('button', { name: /Import M3U file \(chunked\)/ }));
+
+    const container = document.querySelector('#providers')!;
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(
+      [
+        [
+          '#EXTM3U',
+          '#EXTINF:-1,A',
+          'https://stream.test/a.m3u8',
+          '#EXTINF:-1,B',
+          'https://stream.test/b.m3u8',
+        ].join('\n'),
+      ],
+      'playlist.m3u',
+    );
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fireEvent.change(fileInput);
+
+    fireEvent.click(screen.getByRole('button', { name: /Parse playlist/ }));
+
+    // The parser now runs through the worker client (inline fallback in tests).
+    expect(await screen.findByText(/Start import/)).toBeDefined();
+    expect(screen.getByText(/Parsed/)).toBeDefined();
+    expect(document.body.textContent).toContain('2');
+  });
+
 });

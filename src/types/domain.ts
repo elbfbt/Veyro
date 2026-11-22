@@ -48,7 +48,7 @@ export interface Preferences {
   motion: 'full' | 'reduced';
   autoplay: boolean;
   autoReconnect: boolean;
-  preferredPlayer: 'auto' | 'native' | 'hls' | 'shaka';
-  fallbackPlayer: 'auto' | 'native' | 'hls' | 'shaka';
+  preferredPlayer: 'auto' | 'native' | 'hls';
+  fallbackPlayer: 'auto' | 'native' | 'hls';
   language: string;
 }

@@ -15,11 +15,23 @@ const defaults: Preferences = {
   language: 'en',
 };
 
+function sanitize(player: unknown): Preferences['preferredPlayer'] {
+  return player === 'native' || player === 'hls' ? player : 'auto';
+}
+
 function load(): Preferences {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (!stored) return defaults;
-    return { ...defaults, ...(JSON.parse(stored) as Partial<Preferences>) };
+    const parsed = JSON.parse(stored) as Partial<Preferences>;
+    // Older builds offered a "shaka" engine that was never implemented; stored
+    // values must not surface a player that does not exist.
+    return {
+      ...defaults,
+      ...parsed,
+      preferredPlayer: sanitize(parsed.preferredPlayer),
+      fallbackPlayer: sanitize(parsed.fallbackPlayer),
+    };
   } catch {
     return defaults;
   }
@@ -64,4 +76,13 @@ export function usePreferences(): PreferencesContextValue {
   const context = useContext(PreferencesContext);
   if (!context) throw new Error('usePreferences must be used inside PreferencesProvider');
   return context;
+}
+
+/**
+ * Like usePreferences, but returns null outside the provider. The player uses
+ * this so it still renders when embedded without the settings shell (tests,
+ * future standalone player routes) while persisting choices when it can.
+ */
+export function useOptionalPreferences(): PreferencesContextValue | null {
+  return useContext(PreferencesContext);
 }

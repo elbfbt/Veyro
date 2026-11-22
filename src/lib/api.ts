@@ -96,10 +96,12 @@ export async function importInit(input: ImportInitInput): Promise<{ jobId: strin
 export async function importChunk(
   jobId: string,
   input: ImportChunkInput,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ chunkIndex: number; status: 'completed' | 'skipped'; importedEntries: number }> {
   return apiRequest(`/api/providers/import-chunk/${jobId}`, {
     method: 'POST',
     body: JSON.stringify(input),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
 }
 

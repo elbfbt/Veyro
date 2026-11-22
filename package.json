@@ -20,6 +20,7 @@
     "deploy": "npm run build && npm run migrate:remote && wrangler deploy"
   },
   "dependencies": {
+    "hls.js": "1.7.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
