@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, FileUp, Link2, RefreshCw, Trash2, Wifi } from 'lucide-react';
 import { ApiError, apiRequest, importCancel, importComplete, importChunk, importInit, getImportProgress } from '../../lib/api';
-import { parseM3u, type M3uEntry } from '../../lib/m3uParser';
+import {
+  countPlaylistEntries,
+  M3uImportError,
+  streamPlaylistChunks,
+} from '../../lib/m3uImportClient';
 import type { ConnectionTestResult, Provider, ProviderImportStats, ProviderType } from '../../types/providers';
 
 type ActionName = 'test' | 'refresh' | 'default' | 'toggle' | 'save' | 'import' | 'delete';
@@ -31,7 +35,6 @@ type ImportPhase = 'idle' | 'selecting' | 'parsing' | 'preview' | 'initializing'
 interface ChunkedImportState {
   phase: ImportPhase;
   file: File | null;
-  entries: M3uEntry[] | null;
   totalEntries: number;
   totalChunks: number;
   currentChunk: number;
@@ -41,12 +44,17 @@ interface ChunkedImportState {
   retries: number; // retries for the current chunk (max 3)
   jobId: string | null;
   providerId: string | null;
+  /** Entries parsed so far while the background parser runs. */
+  parsedEntries: number;
+  /** Byte progress of the background parse (0-100). */
+  parsePercentage: number;
+  /** True when parsing had to run on the main thread (no worker). */
+  parseFallback: boolean;
 }
 
 const EMPTY_IMPORT: ChunkedImportState = {
   phase: 'idle',
   file: null,
-  entries: null,
   totalEntries: 0,
   totalChunks: 0,
   currentChunk: 0,
@@ -56,6 +64,9 @@ const EMPTY_IMPORT: ChunkedImportState = {
   retries: 0,
   jobId: null,
   providerId: null,
+  parsedEntries: 0,
+  parsePercentage: 0,
+  parseFallback: false,
 };
 
 const CHUNK_SIZE = 1000;
@@ -64,6 +75,12 @@ const MAX_RETRIES = 3;
 function message(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return 'Something went wrong. Please try again.';
+}
+
+/** Errors thrown by the parser/importer already carry a user-facing message. */
+function importErrorMessage(error: unknown): string {
+  if (error instanceof ApiError || error instanceof M3uImportError) return error.message;
+  return message(error);
 }
 
 function formatDate(value: number | null): string {
@@ -223,6 +240,14 @@ export function ProvidersSection() {
 
   /* ── Chunked import ─────────────────────────────────────────── */
 
+  const cancelActiveImport = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+  }, []);
+
+  // Stop a running parse/upload when leaving the settings page.
+  useEffect(() => () => cancelActiveImport(), [cancelActiveImport]);
+
   function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (!file) return;
@@ -230,42 +255,88 @@ export function ProvidersSection() {
       setError('Choose a .m3u or .m3u8 playlist file.');
       return;
     }
-    setImportState((current) => ({ ...current, phase: 'selecting', file, error: null }));
+    setImportState((current) => ({
+      ...current,
+      phase: 'selecting',
+      file,
+      error: null,
+      parsedEntries: 0,
+      parsePercentage: 0,
+      parseFallback: false,
+    }));
     setError('');
     setNotice('');
   }
 
+  /**
+   * Count the entries in the background worker. Only the total is retained, so
+   * a 100,000 entry playlist never sits in React state or on the main thread.
+   */
   async function parseFile() {
     const file = importState.file;
     if (!file) return;
 
-    setImportState((current) => ({ ...current, phase: 'parsing', error: null }));
+    cancelActiveImport();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setImportState((current) => ({
+      ...current,
+      phase: 'parsing',
+      error: null,
+      parsedEntries: 0,
+      parsePercentage: 0,
+    }));
 
     try {
-      const text = await file.text();
-      const parsed = parseM3u(text);
-      const entries = parsed.entries;
-      const totalChunks = Math.ceil(entries.length / CHUNK_SIZE);
+      const totalEntries = await countPlaylistEntries(file, {
+        signal: controller.signal,
+        onProgress: ({ parsedEntries, bytesProcessed }) => {
+          const percentage =
+            file.size > 0 ? Math.min(99, Math.round((bytesProcessed / file.size) * 100)) : 0;
+          setImportState((current) =>
+            current.phase === 'parsing'
+              ? { ...current, parsedEntries, parsePercentage: percentage }
+              : current,
+          );
+        },
+        onFallback: () => setImportState((current) => ({ ...current, parseFallback: true })),
+      });
 
+      if (controller.signal.aborted) return;
+
+      if (totalEntries === 0) {
+        throw new M3uImportError(
+          'invalid_playlist',
+          'No playable entries were found in this playlist.',
+        );
+      }
+
+      const totalChunks = Math.ceil(totalEntries / CHUNK_SIZE);
       setImportState((current) => ({
         ...current,
         phase: 'preview',
-        entries,
-        totalEntries: entries.length,
+        totalEntries,
         totalChunks,
         currentChunk: 0,
         importedEntries: 0,
         percentage: 0,
+        parsedEntries: totalEntries,
+        parsePercentage: 100,
       }));
     } catch (caught) {
-      setImportState((current) => ({ ...current, phase: 'failed', error: message(caught) }));
-      setError(caught instanceof Error ? caught.message : 'Failed to parse playlist.');
+      if (controller.signal.aborted) return;
+      const text = importErrorMessage(caught);
+      setImportState((current) => ({ ...current, phase: 'failed', error: text }));
+      setError(text);
+    } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
     }
   }
 
   async function startChunkedImport() {
-    const { file, entries } = importState;
-    if (!file || !entries) return;
+    const { file, totalEntries } = importState;
+    if (!file || totalEntries <= 0) return;
 
     setBusy('import');
     setError('');
@@ -275,7 +346,6 @@ export function ProvidersSection() {
       setImportState((current) => ({ ...current, phase: 'initializing', error: null }));
 
       const providerName = form.name.trim() || file.name.replace(/\.m3u8?$/i, '');
-      const totalEntries = entries.length;
       const totalChunks = Math.ceil(totalEntries / CHUNK_SIZE);
 
       const { jobId, providerId } = await importInit({
@@ -293,76 +363,101 @@ export function ProvidersSection() {
         providerId,
         totalEntries,
         totalChunks,
+        currentChunk: 0,
+        importedEntries: 0,
+        percentage: 0,
+        retries: 0,
       }));
 
-      await uploadChunks(entries, jobId);
+      await runChunkUpload({ file, jobId, startChunk: 0, totalEntries, totalChunks });
     } catch (caught) {
-      setImportState((current) => ({ ...current, phase: 'failed', error: message(caught) }));
-      setError(caught instanceof Error ? caught.message : 'Import failed.');
+      const text = importErrorMessage(caught);
+      setImportState((current) => ({ ...current, phase: 'failed', error: text }));
+      setError(text);
     } finally {
       setBusy(null);
     }
   }
 
-  async function uploadChunks(entries: M3uEntry[], jobId: string) {
+  /**
+   * Stream chunks from the parser and upload them one at a time. The parser
+   * waits for each chunk to be acknowledged, so at most one chunk (1,000
+   * entries) is ever in flight.
+   */
+  async function runChunkUpload(input: {
+    file: File;
+    jobId: string;
+    startChunk: number;
+    totalEntries: number;
+    totalChunks: number;
+  }) {
+    const { file, jobId, startChunk, totalEntries, totalChunks } = input;
+
+    cancelActiveImport();
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    let { currentChunk, importedEntries, retries } = importState;
+    try {
+      await streamPlaylistChunks(file, {
+        chunkSize: CHUNK_SIZE,
+        skipChunks: startChunk,
+        signal: controller.signal,
+        onFallback: () => setImportState((current) => ({ ...current, parseFallback: true })),
+        onChunk: async (entries, chunkIndex) => {
+          let attempt = 0;
+          for (;;) {
+            if (controller.signal.aborted) throw new M3uImportError('cancelled');
+            try {
+              const result = await importChunk(jobId, { chunkIndex, entries }, {
+                signal: controller.signal,
+              });
+              const percentage =
+                totalEntries > 0 ? Math.round((result.importedEntries / totalEntries) * 100) : 0;
+              setImportState((current) => ({
+                ...current,
+                currentChunk: chunkIndex + 1,
+                importedEntries: result.importedEntries,
+                percentage,
+                retries: 0,
+                error: null,
+              }));
+              return;
+            } catch (caught) {
+              if (controller.signal.aborted) throw new M3uImportError('cancelled');
+              attempt += 1;
+              if (attempt > MAX_RETRIES) {
+                const detail = caught instanceof Error && caught.message ? ` ${caught.message}` : '';
+                throw new M3uImportError(
+                  'chunk_failed',
+                  `Chunk ${chunkIndex + 1} failed after ${MAX_RETRIES} retries.${detail}`,
+                );
+              }
+              setImportState((current) => ({ ...current, retries: attempt }));
+              // Small delay before retry
+              await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+            }
+          }
+        },
+      });
 
-    while (currentChunk < importState.totalChunks!) {
       if (controller.signal.aborted) return;
 
-      const chunkEntries = entries.slice(currentChunk * CHUNK_SIZE, (currentChunk + 1) * CHUNK_SIZE);
-
-      try {
-        const result = await importChunk(jobId, { chunkIndex: currentChunk, entries: chunkEntries });
-
-        importedEntries = result.importedEntries;
-        const percentage = Math.round((importedEntries / importState.totalEntries!) * 100);
-
-        setImportState((current) => ({
-          ...current,
-          currentChunk: currentChunk + 1,
-          importedEntries,
-          percentage,
-          retries: 0,
-          error: null,
-        }));
-
-        currentChunk++;
-      } catch (caught) {
-        if (retries >= MAX_RETRIES) {
-          setImportState((current) => ({
-            ...current,
-            phase: 'failed',
-            error: `Chunk ${currentChunk + 1} failed after ${MAX_RETRIES} retries.`,
-          }));
-          setError(`Chunk ${currentChunk + 1} failed after ${MAX_RETRIES} retries.`);
-          return;
-        }
-
-        retries++;
-        setImportState((current) => ({ ...current, retries }));
-        // Small delay before retry
-        await new Promise((resolve) => setTimeout(resolve, 1000 * retries));
-      }
-    }
-
-    // All chunks uploaded — mark complete
-    try {
       const { provider } = await importComplete(jobId);
       setImportState((current) => ({
         ...current,
         phase: 'completed',
-        currentChunk: importState.totalChunks,
+        currentChunk: totalChunks,
         percentage: 100,
       }));
-      setNotice(`Playlist imported as "${provider.name}" (${importState.totalEntries} entries).`);
+      setNotice(`Playlist imported as "${provider.name}" (${totalEntries} entries).`);
       await load();
     } catch (caught) {
-      setImportState((current) => ({ ...current, phase: 'failed', error: message(caught) }));
-      setError(caught instanceof Error ? caught.message : 'Failed to finalize import.');
+      if (controller.signal.aborted) return;
+      const text = importErrorMessage(caught);
+      setImportState((current) => ({ ...current, phase: 'failed', error: text }));
+      setError(text);
+    } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
     }
   }
 
@@ -397,28 +492,45 @@ export function ProvidersSection() {
         return;
       }
 
-      // Resume from completed_chunks
-      const entries = importState.entries!;
+      const file = importState.file;
+      if (!file) {
+        setImportState((current) => ({
+          ...current,
+          phase: 'failed',
+          error: 'Reselect the playlist file to resume this import.',
+        }));
+        return;
+      }
+
+      const totalEntries = progress.totalEntries || importState.totalEntries;
+      const totalChunks =
+        progress.totalChunks || importState.totalChunks || Math.ceil(totalEntries / CHUNK_SIZE);
+
       setImportState((current) => ({
         ...current,
         phase: 'uploading',
+        totalEntries,
+        totalChunks,
         currentChunk: progress.completedChunks,
         importedEntries: progress.importedEntries,
         percentage: progress.percentage,
         retries: 0,
       }));
 
-      await uploadChunks(entries, jobId);
+      // Deterministic re-parse: the parser skips the chunks D1 already has, so
+      // resuming from completedChunks uploads exactly the remaining entries.
+      await runChunkUpload({ file, jobId, startChunk: progress.completedChunks, totalEntries, totalChunks });
     } catch (caught) {
-      setImportState((current) => ({ ...current, phase: 'failed', error: message(caught) }));
-      setError(caught instanceof Error ? caught.message : 'Resume failed.');
+      const text = importErrorMessage(caught);
+      setImportState((current) => ({ ...current, phase: 'failed', error: text }));
+      setError(text);
     } finally {
       setBusy(null);
     }
   }
 
   async function cancelImport() {
-    abortControllerRef.current?.abort();
+    cancelActiveImport();
 
     let serverCleanupFailed = false;
     if (importState.jobId) {
@@ -623,14 +735,30 @@ export function ProvidersSection() {
 
             {importState.phase === 'parsing' && (
               <>
-                <p>Parsing playlist…</p>
+                <p>
+                  Parsing playlist in the background… {importState.parsedEntries.toLocaleString()} entries
+                </p>
+                {importState.parsePercentage > 0 && (
+                  <div className="progress-bar">
+                    <div
+                      className="progress-bar__fill"
+                      style={{ width: `${importState.parsePercentage}%` }}
+                    />
+                  </div>
+                )}
+                {importState.parseFallback && (
+                  <p className="provider-message">
+                    Background worker unavailable — parsing on the main thread. Large playlists may be
+                    slower to preview.
+                  </p>
+                )}
                 <button type="button" className="button button--ghost" onClick={cancelImport}>
                   Cancel
                 </button>
               </>
             )}
 
-            {importState.phase === 'preview' && importState.entries && (
+            {importState.phase === 'preview' && (
               <>
                 <p>
                   Parsed <strong>{importState.totalEntries}</strong> entries in{' '}
@@ -678,6 +806,11 @@ export function ProvidersSection() {
                 {importState.retries > 0 && (
                   <p className="provider-message">
                     Retrying chunk {importState.currentChunk + 1} (attempt {importState.retries} / {MAX_RETRIES})...
+                  </p>
+                )}
+                {importState.parseFallback && (
+                  <p className="provider-message">
+                    Background worker unavailable — parsing on the main thread.
                   </p>
                 )}
                 <div className="provider-actions">
